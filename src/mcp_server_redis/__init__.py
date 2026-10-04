@@ -5,9 +5,9 @@ mcp-server-redis 核心包入口。
 @since 2026-10-04
 """
 
-__version__ = "0.1.0"
+from mcp_server_redis.server import SERVER_VERSION, create_app, main
 
+__version__ = SERVER_VERSION
 
-def main() -> None:
-    """服务入口占位函数。"""
-    pass
+__all__ = ["SERVER_VERSION", "__version__", "create_app", "main"]
+
