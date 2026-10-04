@@ -37,7 +37,6 @@ _DEFAULT_SERVER_HOST: Final[str] = "0.0.0.0"
 _DEFAULT_SERVER_PORT: Final[int] = 8000
 
 
-
 def load_dotenv_if_exists(dotenv_path: Path | str | None = None) -> bool:
     """探测并轻量加载本地 .env 文件至进程环境变量，绝不覆盖已存在的系统/用户级环境变量。
 
@@ -182,6 +181,16 @@ def resolve_allow_write_from_env() -> bool:
     return bool(val is not None and not parse_bool_env("MCP_REDIS_READ_ONLY", default=True))
 
 
+def resolve_cluster_flag_from_env() -> bool:
+    """从环境变量检查是否启用 Redis Cluster 分片集群连接模式。
+
+    读取 `MCP_REDIS_CLUSTER` 环境变量（支持 true/1/yes/on）。
+
+    @return 是否开启分片集群模式
+    """
+    return parse_bool_env("MCP_REDIS_CLUSTER", default=False)
+
+
 def resolve_log_level_from_env() -> str:
     """从环境变量解析运行时日志级别。
 
@@ -290,6 +299,7 @@ class ServerConfig(NamedTuple):
     @property transport 生效的传输协议（"stdio" 或 "sse"）
     @property host SSE 监听地址（默认 "0.0.0.0"）
     @property port SSE 监听端口（默认 8000）
+    @property is_cluster 是否开启 Redis Cluster 集群模式（默认 False）
     """
 
     url: str
@@ -299,6 +309,7 @@ class ServerConfig(NamedTuple):
     transport: str = _DEFAULT_TRANSPORT
     host: str = _DEFAULT_SERVER_HOST
     port: int = _DEFAULT_SERVER_PORT
+    is_cluster: bool = False
 
 
 def resolve_server_configuration(
@@ -309,6 +320,7 @@ def resolve_server_configuration(
     cli_transport: str | None = None,
     cli_host: str | None = None,
     cli_port: int | None = None,
+    cli_cluster: bool | None = None,
 ) -> ServerConfig:
     """统一决议服务端最终启动配置参数。
 
@@ -322,7 +334,8 @@ def resolve_server_configuration(
     @param cli_transport CLI 命令行传入的 --transport（可选）
     @param cli_host CLI 命令行传入的 --host（可选）
     @param cli_port CLI 命令行传入的 --port（可选）
-    @return ServerConfig 命名元组 (url, config, allow_write, log_level, transport, host, port)
+    @param cli_cluster CLI 命令行传入的 --cluster 开关（可选）
+    @return ServerConfig 命名元组 (url, config, allow_write, log_level, transport, host, port, is_cluster)
     """
     # 1. 尝试探测并安全载入 .env 文件
     load_dotenv_if_exists()
@@ -369,6 +382,12 @@ def resolve_server_configuration(
     else:
         effective_port = resolve_server_port_from_env()
 
+    # 9. 决议生效集群模式（CLI > 环境变量）
+    if cli_cluster is not None:
+        effective_cluster = cli_cluster
+    else:
+        effective_cluster = resolve_cluster_flag_from_env()
+
     return ServerConfig(
         url=effective_url,
         config=effective_config,
@@ -377,6 +396,5 @@ def resolve_server_configuration(
         transport=effective_transport,
         host=effective_host,
         port=effective_port,
+        is_cluster=effective_cluster,
     )
-
-

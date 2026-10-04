@@ -271,9 +271,7 @@ async def test_redis_set_string_invalid_params(
         await redis_set_string(sample_registry, key="", value="val", guard=write_guard)
 
     with pytest.raises(ValueError, match="ex 必须大于 0"):
-        await redis_set_string(
-            sample_registry, key="k", value="v", ex=0, guard=write_guard
-        )
+        await redis_set_string(sample_registry, key="k", value="v", ex=0, guard=write_guard)
 
 
 # --- 3. redis_expire_key 测试 ---
@@ -454,3 +452,90 @@ async def test_register_string_tools_with_server(
     assert "redis_set_string" in tool_names
     assert "redis_expire_key" in tool_names
     assert "redis_delete_keys" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_redis_delete_keys_cluster_safe_deletion(
+    sample_registry: ConnectionRegistry,
+    write_guard: SecurityGuard,
+) -> None:
+    """验证当底层客户端为 RedisCluster 时，物理删除自动按单键逐个安全执行以防御跨槽异常。"""
+    from redis.asyncio.cluster import RedisCluster
+
+    mock_cluster = AsyncMock(spec=RedisCluster)
+    mock_cluster.delete = AsyncMock(side_effect=[1, 1, 0])
+
+    with patch.object(sample_registry, "get_client", return_value=mock_cluster):
+        res = await redis_delete_keys(
+            sample_registry,
+            keys=["cluster:a", "cluster:b", "cluster:c"],
+            confirm=True,
+            guard=write_guard,
+        )
+
+        assert res["status"] == "success"
+        assert res["confirmed"] is True
+        assert res["deleted_count"] == 2
+        assert mock_cluster.delete.call_count == 3
+        mock_cluster.delete.assert_any_call("cluster:a")
+        mock_cluster.delete.assert_any_call("cluster:b")
+        mock_cluster.delete.assert_any_call("cluster:c")
+
+
+@pytest.mark.asyncio
+async def test_redis_delete_keys_crossslot_fallback(
+    sample_registry: ConnectionRegistry,
+    write_guard: SecurityGuard,
+) -> None:
+    """验证单机客户端若在批量删除时抛出 CROSSSLOT 异常，能够安全捕获并自动降级为逐键删除。"""
+    mock_client = AsyncMock()
+
+    async def _mock_delete(*args: str) -> int:
+        if len(args) > 1:
+            raise redis.exceptions.ResponseError(
+                "CROSSSLOT Keys in request don't hash to the same slot"
+            )
+        return 1
+
+    mock_client.delete = AsyncMock(side_effect=_mock_delete)
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_delete_keys(
+            sample_registry,
+            keys=["slot:1", "slot:2"],
+            confirm=True,
+            guard=write_guard,
+        )
+
+        assert res["status"] == "success"
+        assert res["confirmed"] is True
+        assert res["deleted_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_redis_delete_keys_pipeline_probe_fallback(
+    sample_registry: ConnectionRegistry,
+    write_guard: SecurityGuard,
+) -> None:
+    """验证未确认删除时若 Pipeline 探活异常，能够安全降级为逐键 exists 探测。"""
+    mock_client = AsyncMock()
+    mock_pipe = MagicMock()
+    mock_pipe.execute = AsyncMock(side_effect=RuntimeError("Pipeline unsupported in cluster proxy"))
+    mock_client.pipeline = MagicMock(return_value=mock_pipe)
+
+    # 逐键探测模拟：第一个存在，第二个不存在
+    mock_client.exists = AsyncMock(side_effect=[1, 0])
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_delete_keys(
+            sample_registry,
+            keys=["probe:1", "probe:2"],
+            confirm=False,
+            guard=write_guard,
+        )
+
+        assert res["status"] == "confirmation_required"
+        assert res["confirmed"] is False
+        assert res["existing_count"] == 1
+        assert res["existing_keys"] == ["probe:1"]
+        assert mock_client.exists.call_count == 2

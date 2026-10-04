@@ -17,6 +17,7 @@ import redis.asyncio as aioredis
 import redis.exceptions
 import yaml
 from pydantic import BaseModel, Field, model_validator
+from redis.asyncio.cluster import RedisCluster
 
 logger = logging.getLogger(__name__)
 
@@ -96,14 +97,26 @@ class ConnectionProfile(BaseModel):
     readonly: bool = True
     description: str = ""
     db: int = Field(default=0, ge=0, le=15)
+    is_cluster: bool = False
 
     @model_validator(mode="before")
     @classmethod
     def populate_defaults_from_url(cls, data: Any) -> Any:
-        """从 URL 自动推断缺省的数据库编号。"""
+        """从 URL 自动推断缺省的数据库编号与集群协议自适应归一化。"""
         if isinstance(data, dict):
             url = data.get("url", "")
-            if "db" not in data and url:
+            if isinstance(url, str):
+                if url.startswith("redis-cluster://"):
+                    data["url"] = "redis://" + url[len("redis-cluster://") :]
+                    data["is_cluster"] = True
+                elif url.startswith("rediss-cluster://"):
+                    data["url"] = "rediss://" + url[len("rediss-cluster://") :]
+                    data["is_cluster"] = True
+
+            if data.get("is_cluster") or data.get("cluster"):
+                data["is_cluster"] = True
+                data["db"] = 0
+            elif "db" not in data and url:
                 parsed_db = _extract_db_from_url(url)
                 if parsed_db is not None:
                     data["db"] = parsed_db
@@ -118,7 +131,8 @@ class ConnectionProfile(BaseModel):
         """安全模型字符串展示，避免在日志与控制台中泄漏明文凭据。"""
         return (
             f"ConnectionProfile(alias='{self.alias}', url='{self.masked_url}', "
-            f"readonly={self.readonly}, db={self.db}, description='{self.description}')"
+            f"readonly={self.readonly}, db={self.db}, is_cluster={self.is_cluster}, "
+            f"description='{self.description}')"
         )
 
 
@@ -133,6 +147,7 @@ class _RawConnectionEntry(BaseModel):
     readonly: bool = True
     description: str = ""
     db: int | None = Field(default=None, ge=0, le=15)
+    cluster: bool = False
 
 
 class _RawConfigFile(BaseModel):
@@ -161,7 +176,7 @@ class ConnectionRegistry:
         @param default_alias 默认使用的连接别名
         """
         self._profiles: dict[str, ConnectionProfile] = {}
-        self._clients: dict[tuple[str, int], aioredis.Redis] = {}
+        self._clients: dict[tuple[str, int], aioredis.Redis | RedisCluster] = {}
         self.default_alias: str = default_alias
 
     @property
@@ -177,10 +192,11 @@ class ConnectionRegistry:
         """
         self._profiles[profile.alias] = profile
         logger.info(
-            "已注册 Redis 连接档案: alias='%s', url='%s', db=%d, readonly=%s",
+            "已注册 Redis 连接档案: alias='%s', url='%s', db=%d, is_cluster=%s, readonly=%s",
             profile.alias,
             profile.masked_url,
             profile.db,
+            profile.is_cluster,
             profile.readonly,
         )
         if is_default:
@@ -218,24 +234,48 @@ class ConnectionRegistry:
         self,
         alias: str | None = None,
         db: int | None = None,
-    ) -> aioredis.Redis:
+    ) -> aioredis.Redis | RedisCluster:
         """按别名和数据库编号以无状态路由方式获取 Redis 异步客户端。
 
         严格以物理绑定数据库形式分发连接池，严禁在连接上执行全局有状态 SELECT。
+        当连接为分片集群 (Redis Cluster) 时，强制绑定 db=0 并路由至 RedisCluster 驱动。
 
         @param alias 连接别名（可选，缺省为默认连接）
         @param db 数据库编号（可选，0~15，缺省为连接档案配置的 db）
-        @return 绑定至目标数据库的 Redis 客户端实例
+        @return 绑定至目标数据库的 Redis / RedisCluster 客户端实例
         @throws ConnectionNotFoundError 别名不存在时抛出
         @throws InvalidDatabaseError 数据库编号不在 0~15 范围时抛出
         """
         profile = self.get_profile(alias)
+
+        # 1. 分片集群模式自适应路由
+        if profile.is_cluster:
+            if db is not None and db != 0:
+                logger.warning(
+                    "Redis Cluster 分片集群仅支持单一逻辑库 db=0，已防御性重置请求 db=%d 为 0",
+                    db,
+                )
+            cache_key = (profile.alias, 0)
+            if cache_key in self._clients:
+                return self._clients[cache_key]
+
+            # 集群连接 URL 剥除路径中的 /db，防止解析校验失败
+            parsed = urllib.parse.urlsplit(profile.url)
+            cluster_url = urllib.parse.urlunsplit(
+                (parsed.scheme, parsed.netloc, "", parsed.query, parsed.fragment)
+            )
+            cluster_client = RedisCluster.from_url(
+                cluster_url,
+                decode_responses=False,
+            )
+            self._clients[cache_key] = cluster_client
+            return cluster_client
+
+        # 2. 单机模式路由
         target_db = db if db is not None else profile.db
 
         if target_db < 0 or target_db > 15:
-            raise InvalidDatabaseError(
-                f"数据库编号必须在 0 到 15 之间，当前传入: {target_db}"
-            )
+            raise InvalidDatabaseError(f"数据库编号必须在 0 到 15 之间，当前传入: {target_db}")
 
         cache_key = (profile.alias, target_db)
         if cache_key in self._clients:
@@ -278,6 +318,7 @@ class ConnectionRegistry:
         alias: str = "default",
         readonly: bool = True,
         description: str = "",
+        is_cluster: bool = False,
     ) -> "ConnectionRegistry":
         """从单个 Redis URL 构造极简连接注册中心。
 
@@ -285,6 +326,7 @@ class ConnectionRegistry:
         @param alias 连接别名，默认 'default'
         @param readonly 是否只读，默认 True
         @param description 连接描述
+        @param is_cluster 是否开启 Redis Cluster 分片集群模式，默认 False
         @return 已装配好默认连接的注册中心实例
         """
         registry = cls(default_alias=alias)
@@ -293,6 +335,7 @@ class ConnectionRegistry:
             url=url,
             readonly=readonly,
             description=description,
+            is_cluster=is_cluster,
         )
         registry.register(profile, is_default=True)
         return registry
@@ -341,6 +384,7 @@ class ConnectionRegistry:
                 "url": entry.url,
                 "readonly": entry.readonly,
                 "description": entry.description,
+                "is_cluster": entry.cluster,
             }
             if entry.db is not None:
                 profile_kwargs["db"] = entry.db

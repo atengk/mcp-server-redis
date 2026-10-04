@@ -91,6 +91,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=None,
         help="SSE 模式服务监听端口（默认读取 MCP_REDIS_SERVER_PORT 环境变量或默认 8000）",
     )
+    parser.add_argument(
+        "--cluster",
+        action="store_true",
+        default=False,
+        help="激活 Redis Cluster 分片集群连接模式（默认读取 MCP_REDIS_CLUSTER 环境变量或连接配置）",
+    )
     return parser
 
 
@@ -98,7 +104,7 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
     """解析命令行参数或传入参数列表。
 
     @param args 可选自定义参数列表，缺省时读取 sys.argv[1:]
-    @return 包含 url, config, allow_write, log_level, transport, host, port 键的配置字典
+    @return 包含 url, config, allow_write, log_level, transport, host, port, cluster 键的配置字典
     """
     parser = build_argument_parser()
     parsed = parser.parse_args(args)
@@ -110,6 +116,7 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
         "transport": parsed.transport,
         "host": parsed.host,
         "port": parsed.port,
+        "cluster": parsed.cluster,
     }
 
 
@@ -118,6 +125,7 @@ def create_app(
     config: str | None = None,
     allow_write: bool = False,
     log_level: str | None = None,
+    cluster: bool | None = None,
     server_config: ServerConfig | None = None,
 ) -> FastMCP:
     """工厂函数：根据配置初始化连接注册中心、安全守卫并装配全部 18 个 MCP 工具。
@@ -128,6 +136,7 @@ def create_app(
     @param config 多实例配置文件路径（可选）
     @param allow_write 是否开启写操作权限（默认 False）
     @param log_level 运行时日志级别（可选）
+    @param cluster 是否开启 Redis Cluster 分片集群模式（可选）
     @param server_config 预决议完成的服务端配置对象（可选，若提供则优先采用，避免二次决议）
     @return 已经完成全部工具装配与生命周期绑定的 FastMCP 实例
     """
@@ -137,6 +146,7 @@ def create_app(
         cli_config=config,
         cli_allow_write=allow_write,
         cli_log_level=log_level,
+        cli_cluster=cluster,
     )
 
     # 1. 初始化连接注册中心 (ConnectionRegistry)
@@ -146,6 +156,7 @@ def create_app(
         registry = ConnectionRegistry.from_url(
             url=effective_config.url,
             readonly=not effective_config.allow_write,
+            is_cluster=effective_config.is_cluster,
         )
 
     # 2. 初始化安全守卫 (SecurityGuard)
@@ -192,6 +203,7 @@ def main() -> None:
         cli_transport=config_dict["transport"],
         cli_host=config_dict["host"],
         cli_port=config_dict["port"],
+        cli_cluster=config_dict["cluster"],
     )
 
     # 动态设置日志级别，输出流严格绑定 sys.stderr，杜绝污染 stdout 协议流
@@ -218,9 +230,6 @@ def main() -> None:
     else:
         logger.info("mcp-server-redis 正在以标准 stdio 协议管道模式运行...")
         app.run(transport="stdio")
-
-
-
 
 
 if __name__ == "__main__":

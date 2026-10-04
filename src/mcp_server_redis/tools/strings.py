@@ -7,10 +7,13 @@
 @since 2026-10-04
 """
 
+import asyncio
 import logging
 from typing import Any
 
 import redis.exceptions
+from redis.asyncio.cluster import RedisCluster
+from redis.exceptions import ResponseError
 
 from mcp_server_redis.core.connection import ConnectionRegistry
 from mcp_server_redis.core.guard import SecurityGuard
@@ -209,6 +212,34 @@ async def redis_expire_key(
     }
 
 
+async def _safe_exists_keys_individually(
+    client: Any,
+    keys: list[str],
+) -> list[str]:
+    """并发逐键探测键存在性，避免单请求跨槽崩溃与串行网络延迟。
+
+    @param client Redis 客户端实例
+    @param keys 待探测键名列表
+    @return 确认存在的键名列表
+    """
+    results = await asyncio.gather(*(client.exists(k) for k in keys), return_exceptions=False)
+    return [k for k, ex in zip(keys, results, strict=False) if bool(ex)]
+
+
+async def _safe_delete_keys_individually(
+    client: Any,
+    keys: list[str],
+) -> int:
+    """并发逐键安全执行删除，避免集群跨槽 CROSSSLOT 崩溃与串行网络开销。
+
+    @param client Redis 客户端实例
+    @param keys 待删除键名列表
+    @return 成功删除的键总数
+    """
+    results = await asyncio.gather(*(client.delete(k) for k in keys), return_exceptions=False)
+    return sum(int(r) for r in results)
+
+
 async def redis_delete_keys(
     registry: ConnectionRegistry,
     keys: list[str] | str,
@@ -250,15 +281,19 @@ async def redis_delete_keys(
 
     client = registry.get_client(alias=connection, db=db)
 
-    # 2. 二次确认门禁拦截判断（使用 pipeline 单次往返批量探查，消除 N+1）
+    # 2. 二次确认门禁拦截判断（使用 pipeline 批量探查，异常时安全降级为并发逐键安全探测）
     if not confirm:
-        pipe = client.pipeline(transaction=False)
-        for k in target_keys:
-            pipe.exists(k)
-        exists_results = await pipe.execute()
-        existing_keys = [
-            k for k, ex in zip(target_keys, exists_results, strict=False) if bool(ex)
-        ]
+        try:
+            pipe = client.pipeline(transaction=False)
+            for k in target_keys:
+                pipe.exists(k)
+            exists_results = await pipe.execute()
+            existing_keys = [
+                k for k, ex in zip(target_keys, exists_results, strict=False) if bool(ex)
+            ]
+        except (redis.exceptions.RedisError, RuntimeError) as exc:
+            logger.warning("Pipeline 探活异常，自动降级为并发逐键安全探测: %s", exc)
+            existing_keys = await _safe_exists_keys_individually(client, target_keys)
 
         msg = (
             f"高危删除拦截：涉及 {len(target_keys)} 个目标键（已探明存在 {len(existing_keys)} 个）。"
@@ -279,8 +314,20 @@ async def redis_delete_keys(
             "deleted_count": 0,
         }
 
-    # 3. 经过确认，执行物理删除
-    deleted_count = await client.delete(*target_keys)
+    # 3. 经过确认，执行物理删除（针对集群或跨槽场景实施并发逐键安全删除防御）
+    if isinstance(client, RedisCluster):
+        deleted_count = await _safe_delete_keys_individually(client, target_keys)
+    else:
+        try:
+            raw_del = await client.delete(*target_keys)
+            deleted_count = int(raw_del)
+        except ResponseError as exc:
+            if "CROSSSLOT" in str(exc).upper():
+                logger.warning("捕获到 CROSSSLOT 跨槽异常，自动降级为并发逐键安全删除: %s", exc)
+                deleted_count = await _safe_delete_keys_individually(client, target_keys)
+            else:
+                raise
+
     logger.info(
         "物理删除键成功: connection=%s, db=%s, keys=%s, deleted_count=%d",
         connection or "default",

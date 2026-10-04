@@ -5,7 +5,11 @@
 @since 2026-10-04
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
+import redis.asyncio as aioredis
+from redis.asyncio.cluster import RedisCluster
 
 from mcp_server_redis.core.connection import (
     ConnectionConfigError,
@@ -163,6 +167,7 @@ async def test_registry_get_client_defaults() -> None:
     registry = ConnectionRegistry.from_url("redis://localhost:6379/2")
     client = registry.get_client()
     assert client is not None
+    assert isinstance(client, aioredis.Redis)
     # 验证底层连接参数绑定的 db 为 2
     assert client.connection_pool.connection_kwargs.get("db") == 2
     await registry.aclose()
@@ -174,6 +179,8 @@ async def test_registry_get_client_stateless_routing_custom_db() -> None:
     registry = ConnectionRegistry.from_url("redis://localhost:6379/0")
     client_db0 = registry.get_client(db=0)
     client_db5 = registry.get_client(db=5)
+    assert isinstance(client_db0, aioredis.Redis)
+    assert isinstance(client_db5, aioredis.Redis)
 
     assert client_db0.connection_pool.connection_kwargs.get("db") == 0
     assert client_db5.connection_pool.connection_kwargs.get("db") == 5
@@ -222,9 +229,70 @@ async def test_registry_get_client_stateless_routing_unix_socket() -> None:
     """验证 Unix Domain Socket 路径切库时路径不被破坏并正确注入 db。"""
     registry = ConnectionRegistry.from_url("unix:///var/run/redis.sock?db=0")
     client = registry.get_client(db=7)
+    assert isinstance(client, aioredis.Redis)
     assert client.connection_pool.connection_kwargs.get("db") == 7
     assert client.connection_pool.connection_kwargs.get("path") == "/var/run/redis.sock"
     await registry.aclose()
 
 
+def test_connection_profile_cluster_scheme_normalization() -> None:
+    """验证以 redis-cluster:// 与 rediss-cluster:// 开头的协议头被自适应识别并归一化。"""
+    profile1 = ConnectionProfile(
+        alias="cluster-plain",
+        url="redis-cluster://:pwd@cluster.node:6379",
+    )
+    assert profile1.is_cluster is True
+    assert profile1.url == "redis://:pwd@cluster.node:6379"
+    assert profile1.db == 0
 
+    profile2 = ConnectionProfile(
+        alias="cluster-tls",
+        url="rediss-cluster://cluster.node:6380/2",
+    )
+    assert profile2.is_cluster is True
+    assert profile2.url == "rediss://cluster.node:6380/2"
+    assert profile2.db == 0
+
+
+def test_registry_from_file_with_cluster_flag(tmp_path: pytest.TempPathFactory) -> None:
+    """验证从配置文件中解析 cluster: true 属性。"""
+    yaml_content = """
+default: cluster-demo
+
+connections:
+  cluster-demo:
+    url: "redis://node1:6379"
+    readonly: false
+    cluster: true
+    description: "分片集群"
+"""
+    config_file = tmp_path / "cluster_connections.yaml"  # type: ignore[operator]
+    config_file.write_text(yaml_content, encoding="utf-8")
+
+    registry = ConnectionRegistry.from_file(config_file)
+    profile = registry.get_profile("cluster-demo")
+    assert profile.is_cluster is True
+    assert profile.db == 0
+
+
+@pytest.mark.asyncio
+async def test_registry_cluster_client_creation_and_db_guard() -> None:
+    """验证分片集群模式下自适应路由至 RedisCluster 且严格防御性重置 db=0。"""
+    registry = ConnectionRegistry.from_url(
+        url="redis-cluster://cluster-host:6379",
+        alias="my-cluster",
+    )
+    profile = registry.get_profile()
+    assert profile.is_cluster is True
+
+    with patch.object(RedisCluster, "from_url") as mock_cluster_from_url:
+        mock_client = MagicMock()
+        mock_cluster_from_url.return_value = mock_client
+
+        # 传入 db=5，严格防御不报错并强制归一为 0
+        client = registry.get_client(alias="my-cluster", db=5)
+        assert client is mock_client
+        mock_cluster_from_url.assert_called_once()
+        # 验证缓存复用
+        client2 = registry.get_client(alias="my-cluster", db=2)
+        assert client2 is mock_client

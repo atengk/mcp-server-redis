@@ -5,6 +5,7 @@
 @since 2026-10-04
 """
 
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -271,3 +272,57 @@ async def test_register_key_tools_with_server(
     assert "redis_scan_keys" in tool_names
     assert "redis_key_inspect" in tool_names
     assert "redis_key_ttl" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_redis_scan_keys_cluster_iter(
+    sample_registry: ConnectionRegistry,
+) -> None:
+    """验证当底层客户端为 RedisCluster 时，自动调用 scan_iter 聚合分片节点匹配键。"""
+    from redis.asyncio.cluster import RedisCluster
+
+    mock_cluster = AsyncMock(spec=RedisCluster)
+
+    async def _async_scan_iter(
+        match: str | None = None, count: int | None = None, _type: str | None = None
+    ) -> AsyncIterator[str | bytes]:
+        yield b"cluster:node1:key1"
+        yield "cluster:node2:key2"
+        yield b"cluster:node1:key1"  # 模拟重复键，测试去重逻辑
+
+    mock_cluster.scan_iter = _async_scan_iter
+
+    with patch.object(sample_registry, "get_client", return_value=mock_cluster):
+        res = await redis_scan_keys(sample_registry, pattern="cluster:*", limit=10)
+
+        assert res["pattern"] == "cluster:*"
+        assert res["count"] == 2
+        assert res["keys"] == ["cluster:node1:key1", "cluster:node2:key2"]
+        assert res["cursor"] == 0
+        assert res["is_truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_redis_scan_keys_cluster_truncated(
+    sample_registry: ConnectionRegistry,
+) -> None:
+    """验证 RedisCluster 模式下若匹配键数超过 limit，正确截断并标记 is_truncated=True。"""
+    from redis.asyncio.cluster import RedisCluster
+
+    mock_cluster = AsyncMock(spec=RedisCluster)
+
+    async def _async_scan_iter(
+        match: str | None = None, count: int | None = None, _type: str | None = None
+    ) -> AsyncIterator[str]:
+        for i in range(10):
+            yield f"item:{i}"
+
+    mock_cluster.scan_iter = _async_scan_iter
+
+    with patch.object(sample_registry, "get_client", return_value=mock_cluster):
+        res = await redis_scan_keys(sample_registry, pattern="item:*", limit=3)
+
+        assert res["count"] == 3
+        assert res["keys"] == ["item:0", "item:1", "item:2"]
+        assert res["cursor"] == 0
+        assert res["is_truncated"] is True

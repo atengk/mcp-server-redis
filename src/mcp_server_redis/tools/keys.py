@@ -11,6 +11,7 @@ import logging
 from typing import Any, Final
 
 import redis.exceptions
+from redis.asyncio.cluster import RedisCluster
 
 from mcp_server_redis.core.connection import ConnectionRegistry
 
@@ -83,9 +84,46 @@ async def redis_scan_keys(
             raise ValueError(f"不支持的 Redis 数据类型: '{type}'，支持的类型: {valid_list}")
 
     client = registry.get_client(alias=connection, db=db)
-    cursor: int = 0
     accumulated_keys: list[str] = []
     seen_keys: set[str] = set()
+
+    # 1. 集群模式：分片集群无全局游标，利用 client.scan_iter 聚合各分片节点匹配键
+    if isinstance(client, RedisCluster):
+        cluster_scan_kwargs: dict[str, Any] = {
+            "match": pattern,
+            "count": effective_limit,
+        }
+        if type_filter:
+            cluster_scan_kwargs["_type"] = type_filter
+
+        async for key_item in client.scan_iter(**cluster_scan_kwargs):
+            if isinstance(key_item, bytes):
+                key_str = key_item.decode("utf-8", errors="replace")
+            else:
+                key_str = str(key_item)
+
+            if key_str not in seen_keys:
+                seen_keys.add(key_str)
+                accumulated_keys.append(key_str)
+
+            # 多探查 1 条以精准判断是否存在截断
+            if len(accumulated_keys) > effective_limit:
+                break
+
+        truncated = len(accumulated_keys) > effective_limit
+        final_keys = accumulated_keys[:effective_limit]
+
+        return {
+            "keys": final_keys,
+            "count": len(final_keys),
+            "pattern": pattern,
+            "type": type,
+            "cursor": 0,
+            "is_truncated": truncated,
+        }
+
+    # 2. 单机模式：通过游标循环非阻塞聚合扫描
+    cursor: int = 0
     iterations: int = 0
 
     while True:

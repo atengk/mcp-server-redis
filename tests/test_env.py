@@ -14,6 +14,7 @@ from mcp_server_redis.core.env import (
     load_dotenv_if_exists,
     parse_bool_env,
     resolve_allow_write_from_env,
+    resolve_cluster_flag_from_env,
     resolve_config_path_from_env,
     resolve_log_level_from_env,
     resolve_redis_url_from_env,
@@ -141,7 +142,9 @@ def test_resolve_redis_url_from_discrete_variables_with_special_chars() -> None:
         assert url is not None
         assert "Admin%40123%3Aspecial%2Fpwd" in url
         assert "test_user%40org" in url
-        assert url.startswith("redis://test_user%40org:Admin%40123%3Aspecial%2Fpwd@103.236.97.210:63730/2")
+        assert url.startswith(
+            "redis://test_user%40org:Admin%40123%3Aspecial%2Fpwd@103.236.97.210:63730/2"
+        )
 
 
 def test_resolve_redis_url_discrete_defaults() -> None:
@@ -308,8 +311,6 @@ def test_resolve_server_configuration_transport_priority() -> None:
         assert res.transport == "stdio"
 
 
-
-
 def test_resolve_log_level_from_env_defaults() -> None:
     """验证未设置 MCP_REDIS_LOG_LEVEL 时保底默认返回 INFO。"""
     with patch.dict(os.environ, {}, clear=True):
@@ -392,3 +393,37 @@ def test_resolve_server_port_from_env() -> None:
         assert resolve_server_port_from_env() == 8000
 
 
+def test_resolve_cluster_flag_from_env() -> None:
+    """验证从环境变量解析集群模式开关，支持真假值归一化与缺省 False。"""
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_cluster_flag_from_env() is False
+
+    for truthy in ["true", "1", "yes", "on", "True", "TRUE"]:
+        with patch.dict(os.environ, {"MCP_REDIS_CLUSTER": truthy}, clear=True):
+            assert resolve_cluster_flag_from_env() is True
+
+    for falsy in ["false", "0", "no", "off", "invalid"]:
+        with patch.dict(os.environ, {"MCP_REDIS_CLUSTER": falsy}, clear=True):
+            assert resolve_cluster_flag_from_env() is False
+
+
+def test_resolve_server_configuration_cluster_precedence() -> None:
+    """验证 resolve_server_configuration 中集群模式配置优先级（CLI > 环境变量 > 默认 False）。"""
+    # 1. 默认保底 False
+    with patch.dict(os.environ, {}, clear=True):
+        cfg = resolve_server_configuration()
+        assert cfg.is_cluster is False
+
+    # 2. 环境变量生效
+    with patch.dict(os.environ, {"MCP_REDIS_CLUSTER": "true"}, clear=True):
+        cfg = resolve_server_configuration()
+        assert cfg.is_cluster is True
+
+    # 3. CLI 显式覆盖环境变量
+    with patch.dict(os.environ, {"MCP_REDIS_CLUSTER": "true"}, clear=True):
+        cfg = resolve_server_configuration(cli_cluster=False)
+        assert cfg.is_cluster is False
+
+    with patch.dict(os.environ, {"MCP_REDIS_CLUSTER": "false"}, clear=True):
+        cfg = resolve_server_configuration(cli_cluster=True)
+        assert cfg.is_cluster is True

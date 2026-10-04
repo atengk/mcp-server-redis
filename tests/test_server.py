@@ -96,6 +96,7 @@ def test_build_argument_parser_defaults() -> None:
     assert args.transport is None
     assert args.host is None
     assert args.port is None
+    assert args.cluster is False
 
 
 def test_parse_cli_arguments_custom_values() -> None:
@@ -113,6 +114,7 @@ def test_parse_cli_arguments_custom_values() -> None:
             "127.0.0.1",
             "--port",
             "8888",
+            "--cluster",
         ]
     )
 
@@ -123,6 +125,7 @@ def test_parse_cli_arguments_custom_values() -> None:
     assert config_dict["transport"] == "sse"
     assert config_dict["host"] == "127.0.0.1"
     assert config_dict["port"] == 8888
+    assert config_dict["cluster"] is True
 
 
 def test_parse_cli_arguments_with_config_file(tmp_path: Path) -> None:
@@ -157,7 +160,6 @@ def test_parse_cli_arguments_transport_choices() -> None:
 
     with pytest.raises(SystemExit):
         parse_cli_arguments(["--transport", "websocket"])
-
 
 
 @pytest.mark.asyncio
@@ -214,3 +216,13 @@ def test_main_entrypoint_sse_mode(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_create_app_cluster_flag_propagation() -> None:
+    """验证 create_app 在显式指定 cluster=True 时正确将集群标记传递给 ConnectionRegistry。"""
+    app = create_app(url="redis://localhost:6379/0", cluster=True)
+    assert app.settings.lifespan is not None
+
+    async with app.settings.lifespan(app) as ctx:
+        registry = ctx["registry"]
+        profile = registry.get_profile()
+        assert profile.is_cluster is True
