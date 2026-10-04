@@ -26,6 +26,14 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/atengk/mcp-server-redis"
+Documentation = "https://github.com/atengk/mcp-server-redis#readme"
+Repository = "https://github.com/atengk/mcp-server-redis"
+Issues = "https://github.com/atengk/mcp-server-redis/issues"
+Changelog = "https://github.com/atengk/mcp-server-redis/releases"
+
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",

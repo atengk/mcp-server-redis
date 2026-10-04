@@ -25,6 +25,9 @@
 
 为大模型提供工业级强只读防护、双重写门禁、单键多维诊断、全数据结构防 OOM 切片读取、慢查询审计与运维诊断能力。
 
+> 💡 **版本更新日志 (Changelog)**：  
+> 每一个正式版本的详细变动明细、关联 Issue 与贡献者致谢均由 `git-cliff` 自动维护，可直接前往 [GitHub Releases](https://github.com/atengk/mcp-server-redis/releases) 查看最新记录。
+
 ---
 
 ## 🌟 核心特性
