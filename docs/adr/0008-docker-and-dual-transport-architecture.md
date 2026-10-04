@@ -33,9 +33,10 @@
    - **默认启动模式**：`CMD ["--transport", "sse", "--host", "0.0.0.0", "--port", "8000"]`，默认以 HTTP SSE 网关模式在 `0.0.0.0:8000` 常驻运行；若用户需要通过 Docker 运行 stdio 管道，仅需在运行时追加 `--transport stdio` 即可平滑覆盖。
 
 4. **开箱即用单服务编排 (`docker-compose.yml`)**：
-   - 定义标准的单服务编排配置 `mcp-server-redis`，预置端口映射 `8000:8000`；
-   - 注入 `extra_hosts: ["host.docker.internal:host-gateway"]`，无缝支持容器直连 Linux/macOS/Windows 宿主机上的外部 Redis 服务；
-   - 预设标准化环境变量模板，覆盖连接 URL、运行时日志、只读安全门禁与集群模式。
+   - **官方 GHCR 镜像优先**：默认直接消费 GitHub Actions CI/CD 自动化构建的多架构官方镜像 `ghcr.io/atengk/mcp-server-redis:latest`，单文件拷贝到任何环境即可一键拉取启动，无需克隆源码；
+   - **开发源码构建插槽**：将 `build: { context: ., dockerfile: Dockerfile }` 作为注释块保留，兼顾开箱即用与本地源码二次开发调试需求；
+   - **动态参数替换与环境协同**：环境变量采用 `${VAR:-default}` 标准插值语法，与 `.env` 配置文件（基于 `.env.example` 派生）形成无缝联动，并在缺省时依赖保底默认值平滑运行；
+   - **跨平台网络互通**：注入 `extra_hosts: ["host.docker.internal:host-gateway"]`，无缝支持容器直连 Linux/macOS/Windows 宿主机上的外部 Redis 服务。
 
 5. **严格的资产隔离与防护规则 (`.dockerignore`)**：
    - 物理阻断 `.git`、`.venv`、`tests/`、开发排查脚本 `scratch/`、日志文件与各类调试缓存打包进镜像，保障镜像的轻量与数据资产的绝对安全。

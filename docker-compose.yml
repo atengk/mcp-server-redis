@@ -1,36 +1,41 @@
 # ==============================================================================
 # atengk-mcp-server-redis 生产级常驻 SSE 模式 Docker Compose 编排
+# 默认拉取 GitHub Container Registry 官方多架构镜像 (amd64/arm64)
 # ==============================================================================
 
 services:
   mcp-server-redis:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: atengk/mcp-server-redis:1.0.0
+    # 官方镜像 (由 GitHub Actions 自动化多架构构建与发布)
+    image: ghcr.io/atengk/mcp-server-redis:latest
+
+    # 若需要基于本地源码二次开发构建，解除下方 build 块注释即可:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+
     container_name: mcp-server-redis
     restart: unless-stopped
     ports:
       - "8000:8000"
     command: ["--transport", "sse", "--host", "0.0.0.0", "--port", "8000"]
     environment:
-      # Redis 连接 URL（支持标准 redis://、rediss:// 或集群 redis-cluster://）
-      # 若连接宿主机上的 Redis 服务，可使用 host.docker.internal
-      - MCP_REDIS_URL=redis://host.docker.internal:6379/0
+      # Redis 连接 URL（优先读取当前目录 .env 文件，若无则使用保底默认值）
+      # 连接宿主机外部 Redis 时使用 host.docker.internal
+      - MCP_REDIS_URL=${MCP_REDIS_URL:-redis://host.docker.internal:6379/0}
 
-      # 运行时日志级别（DEBUG, INFO, WARNING, ERROR，默认 INFO）
-      - MCP_REDIS_LOG_LEVEL=INFO
+      # 运行时日志级别 (DEBUG, INFO, WARNING, ERROR)
+      - MCP_REDIS_LOG_LEVEL=${MCP_REDIS_LOG_LEVEL:-INFO}
 
-      # 全局只读安全守卫（默认强只读 true，设为 false 开启受控写操作）
-      - MCP_REDIS_READ_ONLY=true
+      # 全局只读安全守卫 (默认强只读 true，设为 false 开启受控写操作)
+      - MCP_REDIS_READ_ONLY=${MCP_REDIS_READ_ONLY:-true}
 
-      # 是否开启分片集群模式（若 URL 未使用 redis-cluster:// 协议头，可设为 true 强制激活）
-      - MCP_REDIS_CLUSTER=false
+      # 是否开启分片集群模式 (若 URL 未显式声明 redis-cluster:// 协议头)
+      - MCP_REDIS_CLUSTER=${MCP_REDIS_CLUSTER:-false}
 
-      # 传输协议（默认与 command 保持一致为 sse）
+      # 双模传输网关协议与监听参数 (常驻 SSE 模式)
       - MCP_REDIS_TRANSPORT=sse
       - MCP_REDIS_SERVER_HOST=0.0.0.0
       - MCP_REDIS_SERVER_PORT=8000
     extra_hosts:
-      # 支持在 Linux 容器环境下通过 host.docker.internal 访问宿主机服务
+      # 跨平台宿主机网络互通 (支持 Linux/macOS/Windows)
       - "host.docker.internal:host-gateway"

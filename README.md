@@ -236,7 +236,7 @@ docker-compose up -d
         "MCP_REDIS_URL=redis://host.docker.internal:6379/0",
         "-e",
         "MCP_REDIS_ALLOW_WRITE=true",
-        "atengk/mcp-server-redis:1.0.0",
+        "ghcr.io/atengk/mcp-server-redis:latest",
         "--transport",
         "stdio"
       ]
@@ -252,26 +252,31 @@ docker-compose up -d
 本项目提供工业级轻量化标准容器制品与单服务编排清单，全面兼顾本地终端调试与微服务常驻运行。
 
 ### 核心镜像安全基线
+- **官方 GHCR 多架构镜像**：由 GitHub Actions CI/CD 流水线自动化构建并发布至 GitHub Container Registry（`ghcr.io/atengk/mcp-server-redis:latest`），原生支持 `linux/amd64` 与 `linux/arm64` 双架构；
 - **极速精简多阶段构建**：基于 `python:3.11-slim` 底座与 `uv` 高速依赖预缓存，完全剥离包编译器，产出镜像体积严格 $< 150\text{MB}$；
 - **非 Root 生产安全账号**：容器内以专有非 root 账户 `appuser` (UID: `10001`, GID: `10001`) 运行，并锁定登录 Shell（`/usr/sbin/nologin`），满足企业最小权限与容器合规审计；
 - **开箱即用常驻网关**：默认入口命令为 `atengk-mcp-server-redis`，默认暴露端口 `8000` 并以 HTTP SSE 传输网关模式常驻运行。
 
 ### 使用 docker-compose 常驻部署 (SSE 模式)
 
-工程根目录预置了生产级 [docker-compose.yml](./docker-compose.yml)：
+工程根目录预置了生产级 [docker-compose.yml](./docker-compose.yml)。编排清单**默认拉取官方 GHCR 预编译镜像**，无需本地安装编译环境，亦可将单个文件复制至生产服务器直接运行：
 
 ```bash
-# 后台常驻启动 MCP SSE 服务端
+# 1. (可选) 基于模板初始化本地环境参数
+cp .env.example .env
+
+# 2. 后台常驻启动 MCP SSE 服务端 (自动拉取官方 GHCR 镜像)
 docker-compose up -d
 
-# 检视实时服务日志
+# 3. 检视实时服务日志
 docker-compose logs -f
 ```
 
 容器启动后，MCP 服务端将在宿主机 `http://localhost:8000/sse` 持续监听。各大支持远程 SSE 协议的 MCP 客户端（如 Cherry Studio、远程 Web AI 网关等）只需直接填写该 URL 即可挂载。
 
 > [!TIP]
-> **宿主机网络互通**：`docker-compose.yml` 内建了 `host.docker.internal:host-gateway` 跨平台解析，容器内配置 `MCP_REDIS_URL=redis://host.docker.internal:6379/0` 即可直接连通 Linux、macOS 或 Windows 宿主机上运行的外部 Redis 服务。
+> - **开箱即用与本地编译兼顾**：若需要基于本地源码进行二次开发调试，只需在 `docker-compose.yml` 中解除 `build` 块注释即可无缝切回本地多阶段构建；
+> - **宿主机网络互通**：`docker-compose.yml` 内建了 `host.docker.internal:host-gateway` 跨平台解析，容器内配置 `MCP_REDIS_URL=redis://host.docker.internal:6379/0` 即可直接连通 Linux、macOS 或 Windows 宿主机上运行的外部 Redis 服务。
 
 ---
 
