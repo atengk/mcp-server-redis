@@ -1,0 +1,20 @@
+# mcp-server-redis 多环境连接配置文件示例
+# 启动命令: uvx mcp-server-redis --config ./connections.yaml
+
+default: local
+
+connections:
+  local:
+    url: "redis://localhost:6379/0"
+    readonly: false
+    description: "本地开发默认 Redis (DB 0)"
+
+  dev-db1:
+    url: "redis://localhost:6379/1"
+    readonly: false
+    description: "本地开发测试库 (DB 1)"
+
+  staging-readonly:
+    url: "redis://:your_auth_password@192.168.1.100:6379/0"
+    readonly: true
+    description: "预发布环境只读连接 (强制拦截写操作)"

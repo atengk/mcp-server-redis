@@ -27,22 +27,24 @@
 
 | 领域模块 | 工具名称 | 参数契约 | 功能描述 |
 | :--- | :--- | :--- | :--- |
-| **实例探查** | `redis_ping` | `()` | 健康探活，验证 Redis 实例联通性与响应延迟 |
-| | `redis_info` | `(section: str = None)` | 获取指定模块或全部系统运行时信息（Memory/Stats/Server/Clients） |
-| | `redis_dbsize` | `()` | 获取当前数据库中存储的 Key 总量统计 |
-| **键空间探查** | `redis_scan_keys` | `(match: str = "*", count: int = 50)` | 基于 `SCAN` 游标安全分页匹配键名，杜绝 `KEYS *` 阻塞实例 |
-| | `redis_key_inspect` | `(key: str)` | 一站式获取 Key 的类型、TTL 过期时间、内存占用大小及底层编码 |
-| | `redis_key_ttl` | `(key: str)` | 快速查询 Key 的生存剩余秒数（TTL / PTTL） |
-| **数据读取** | `redis_get_string` | `(key: str)` | 安全读取 String 类型的字符串值 |
-| | `redis_hash_get` | `(key: str, fields: list[str] = None)` | 读取 Hash 表的指定字段或批量全部字段（大表自动保护） |
-| | `redis_list_range` | `(key: str, start: int = 0, stop: int = 49)` | 分页读取 List 列表指定范围的元素 |
-| | `redis_set_members` | `(key: str, count: int = 50)` | 读取 Set 集合元素（支持采样限制） |
-| | `redis_zset_range` | `(key: str, start: int = 0, stop: int = 49, withscores: bool = True)` | 按照排名或分数范围读取 Sorted Set 有序集合成员及分值 |
-| **数据变更**<br>*(需 `--allow-write`)* | `redis_set_string` | `(key: str, value: str, ex: int = None, nx: bool = False)` | 写入或更新 String 键值，支持设置秒级过期时间 |
-| | `redis_delete_keys` | `(keys: list[str], confirm: bool = False)` | 安全删除指定的单条或多条 Key，需显式确认防误删 |
-| | `redis_expire_key` | `(key: str, seconds: int)` | 为指定 Key 设定或更新生存时间 |
-| **运维与诊断** | `redis_get_slowlog` | `(count: int = 10)` | 获取最近慢查询日志记录，定位慢操作与高耗时命令 |
-| | `redis_client_list` | `(limit: int = 20)` | 检视当前连接客户端列表及阻塞状态 |
+| **实例与连接** | `redis_list_connections` | `()` | 查看所有已配置的 Redis 连接别名、脱敏 URL 与当前默认连接 |
+| | `redis_ping` | `(connection=None, db=None)` | 健康探活，验证 Redis 实例联通性与响应延迟 |
+| | `redis_info` | `(section=None, connection=None, db=None)` | 获取指定模块或全部系统运行时信息（Memory/Stats/Server/Clients） |
+| | `redis_dbsize` | `(connection=None, db=None)` | 获取当前数据库中存储的 Key 总量统计 |
+| **键空间探查** | `redis_scan_keys` | `(pattern="*", limit=50, type=None, connection=None, db=None)` | 智能聚合扫描匹配键名，内部循环迭代游标，限制单次返回上限 |
+| | `redis_key_inspect` | `(key: str, connection=None, db=None)` | 一站式获取 Key 的类型、TTL 过期时间、内存占用大小及底层编码 |
+| | `redis_key_ttl` | `(key: str, connection=None, db=None)` | 快速查询 Key 的生存剩余秒数（TTL / PTTL） |
+| **数据读取** | `redis_get_string` | `(key: str, parse_json=True, connection=None, db=None)` | 安全读取 String 字符串（支持自适应 UTF-8 / Base64 及 JSON 结构化解析） |
+| | `redis_hash_get` | `(key: str, fields=None, count=50, connection=None, db=None)` | 读取 Hash 表指定字段或分页采样（大表强制切片截断） |
+| | `redis_list_range` | `(key: str, start=0, stop=49, connection=None, db=None)` | 分页切片读取 List 列表指定范围的元素（单次跨度上限 100） |
+| | `redis_set_members` | `(key: str, count=50, connection=None, db=None)` | 采样读取 Set 集合元素（支持数量安全截断） |
+| | `redis_zset_range` | `(key: str, start=0, stop=49, withscores=True, connection=None, db=None)` | 按排名或分数读取 Sorted Set 成员及分值（单次上限 200） |
+| | `redis_stream_read` | `(key: str, count=20, connection=None, db=None)` | 逆序采样读取 Stream 最新消息条目（单次上限 100） |
+| **数据变更**<br>*(需 `--allow-write`)* | `redis_set_string` | `(key: str, value: str, ex=None, nx=False, connection=None, db=None)` | 写入或更新 String 键值，支持设置秒级过期时间 |
+| | `redis_delete_keys` | `(keys: list[str], confirm=False, connection=None, db=None)` | 安全删除单条或多条 Key，强制 `confirm=True` 二次确认门禁防误删 |
+| | `redis_expire_key` | `(key: str, seconds: int, connection=None, db=None)` | 为指定 Key 设定或更新生存时间 |
+| **运维与诊断** | `redis_get_slowlog` | `(count=10, connection=None, db=None)` | 获取最近慢查询日志记录，定位慢操作与高耗时命令 |
+| | `redis_client_list` | `(limit=20, connection=None, db=None)` | 检视当前连接客户端列表及阻塞状态 |
 
 ---
 
