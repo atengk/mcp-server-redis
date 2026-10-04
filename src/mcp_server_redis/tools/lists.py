@@ -93,9 +93,7 @@ async def redis_list_range(
             effective_start = norm_start
             effective_stop = norm_start + MAX_LIST_SPAN - 1
             truncated = True
-            message = (
-                f"请求跨度 ({requested_span}) 超出上限 ({MAX_LIST_SPAN})，已自动收敛截断。"
-            )
+            message = f"请求跨度 ({requested_span}) 超出上限 ({MAX_LIST_SPAN})，已自动收敛截断。"
         else:
             effective_start = norm_start
             effective_stop = norm_stop
@@ -104,9 +102,7 @@ async def redis_list_range(
         if requested_span > MAX_LIST_SPAN:
             effective_stop = start + MAX_LIST_SPAN - 1
             truncated = True
-            message = (
-                f"请求跨度 ({requested_span}) 超出上限 ({MAX_LIST_SPAN})，已自动收敛截断。"
-            )
+            message = f"请求跨度 ({requested_span}) 超出上限 ({MAX_LIST_SPAN})，已自动收敛截断。"
 
     # 2. 调用底层 LRANGE 获取切片
     try:

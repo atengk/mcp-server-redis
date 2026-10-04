@@ -127,4 +127,3 @@ def test_serialize_large_json_truncated_does_not_penetrate_json_data() -> None:
     assert res.truncated is True
     assert len(res.value) == 50  # type: ignore[arg-type]
     assert res.json_data is None  # 超长截断时安全置空，杜绝上下文穿透
-

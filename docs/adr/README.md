@@ -27,4 +27,5 @@
 | [ADR-0006](./0006-environment-variable-configuration-hierarchy.md) | 环境变量配置分级决议、离散参数组装与安全加载策略 | 已采纳 | 2026-10-04 |
 | [ADR-0007](./0007-redis-cluster-and-cross-slot-architecture.md) | Redis Cluster 分片集群自适应驱动、单一数据库约束与跨槽安全防御 | 已采纳 | 2026-10-04 |
 | [ADR-0008](./0008-docker-and-dual-transport-architecture.md) | 生产级容器化构建策略与常驻 SSE 双模传输网关架构 | 已采纳 | 2026-10-04 |
+| [ADR-0009](./0009-oss-engineering-template-integration.md) | 开源工程化模版集成与现代自动化流水线架构 | 已采纳 | 2026-10-04 |
 

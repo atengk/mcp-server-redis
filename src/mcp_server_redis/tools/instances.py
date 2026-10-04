@@ -65,9 +65,7 @@ async def redis_ping(
     """
     # 1. 显式校验可选 db 范围（若提供）
     if db is not None and (db < 0 or db > 15):
-        raise InvalidDatabaseError(
-            f"数据库编号必须在 0 到 15 之间，当前传入: {db}"
-        )
+        raise InvalidDatabaseError(f"数据库编号必须在 0 到 15 之间，当前传入: {db}")
 
     target_alias = connection if connection is not None else registry.default_alias
     target_db = db if db is not None else 0

@@ -107,9 +107,7 @@ async def test_redis_ping_with_custom_db(sample_registry: ConnectionRegistry) ->
 async def test_redis_ping_connection_failure(sample_registry: ConnectionRegistry) -> None:
     """验证目标 Redis 实例不可达时返回结构化错误信息而非崩溃。"""
     mock_client = AsyncMock()
-    mock_client.ping = AsyncMock(
-        side_effect=redis.exceptions.ConnectionError("Connection refused")
-    )
+    mock_client.ping = AsyncMock(side_effect=redis.exceptions.ConnectionError("Connection refused"))
 
     with patch.object(sample_registry, "get_client", return_value=mock_client):
         res = await redis_ping(sample_registry, connection="staging")
@@ -152,4 +150,3 @@ async def test_redis_ping_unknown_connection_returns_error(
     assert res["status"] == "error"
     assert res["connection"] == "non_existent_alias"
     assert "未找到连接别名" in res["error"]
-

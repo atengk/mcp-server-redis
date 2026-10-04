@@ -1,9 +1,25 @@
 # atengk-mcp-server-redis
 
-[![PyPI Version](https://img.shields.io/pypi/v/atengk-mcp-server-redis.svg)](https://pypi.org/project/atengk-mcp-server-redis/)
-[![Python Version](https://img.shields.io/pypi/pyversions/atengk-mcp-server-redis.svg)](https://pypi.org/project/atengk-mcp-server-redis/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![MCP Protocol](https://img.shields.io/badge/MCP-2024--11--05-green.svg)](https://modelcontextprotocol.io/)
+<p align="center">
+  <a href="https://github.com/atengk/mcp-server-redis/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/atengk/mcp-server-redis/ci.yml?branch=main&label=CI&style=flat-square" alt="CI Status" />
+  </a>
+  <a href="https://github.com/atengk/mcp-server-redis/releases">
+    <img src="https://img.shields.io/github/v/release/atengk/mcp-server-redis?style=flat-square" alt="GitHub Release" />
+  </a>
+  <a href="https://pypi.org/project/atengk-mcp-server-redis/">
+    <img src="https://img.shields.io/pypi/v/atengk-mcp-server-redis?style=flat-square" alt="PyPI Version" />
+  </a>
+  <a href="./LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License" />
+  </a>
+  <a href="./CONTRIBUTING.md">
+    <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome" />
+  </a>
+  <a href="https://modelcontextprotocol.io/">
+    <img src="https://img.shields.io/badge/MCP-2024--11--05-green.svg?style=flat-square" alt="MCP Protocol" />
+  </a>
+</p>
 
 专为大语言模型（LLM）打造的高性能、安全可控的生产级 Redis 模型上下文协议（Model Context Protocol, MCP）服务，基于 Python 与 FastMCP 构建。
 

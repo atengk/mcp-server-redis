@@ -332,9 +332,7 @@ async def test_redis_zset_range_negative_index_stop_minus_one_truncation(
     mock_client = AsyncMock()
     # 模拟大 ZSet 总基数 1000
     mock_client.zcard = AsyncMock(return_value=1000)
-    mock_client.zrange = AsyncMock(
-        return_value=[(f"m{i}".encode(), float(i)) for i in range(200)]
-    )
+    mock_client.zrange = AsyncMock(return_value=[(f"m{i}".encode(), float(i)) for i in range(200)])
 
     with patch.object(sample_registry, "get_client", return_value=mock_client):
         res = await redis_zset_range(sample_registry, key="huge:zset", start=0, stop=-1)
@@ -394,10 +392,7 @@ async def test_redis_stream_read_truncation(
     """验证当 Stream 消息条数达到请求上限 count 时标记 is_truncated 为 True。"""
     mock_client = AsyncMock()
     mock_client.xrevrange = AsyncMock(
-        return_value=[
-            (f"{i}-0".encode(), {b"msg": f"data_{i}".encode()})
-            for i in range(20)
-        ]
+        return_value=[(f"{i}-0".encode(), {b"msg": f"data_{i}".encode()}) for i in range(20)]
     )
 
     with patch.object(sample_registry, "get_client", return_value=mock_client):

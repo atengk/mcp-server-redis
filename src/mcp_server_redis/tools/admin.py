@@ -169,7 +169,9 @@ async def redis_client_list(
     @return 包含客户端诊断属性列表与总数的字典
     """
     profile, client = _get_profile_and_client(registry, connection, db)
-    effective_limit = min(max(limit, 1), MAX_CLIENT_LIST_LIMIT) if limit > 0 else DEFAULT_CLIENT_LIST_LIMIT
+    effective_limit = (
+        min(max(limit, 1), MAX_CLIENT_LIST_LIMIT) if limit > 0 else DEFAULT_CLIENT_LIST_LIMIT
+    )
 
     raw_clients = await client.client_list()
     total_clients = len(raw_clients)

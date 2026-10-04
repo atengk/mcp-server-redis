@@ -94,3 +94,20 @@ _避免使用_: 网络代理 (Network Proxy)、协议转换器 (Protocol Convert
 基于 `python:3.11-slim` 底座与 `uv` 极速多阶段构建的生产安全容器镜像。剥离包编译器，镜像体积严格收敛于 150MB 以内；运行阶段强制下沉为专有非 root 账户 `appuser` (UID: 10001) 并禁用交互 Shell，符合企业最小权限与合规审计基线。  
 _避免使用_: 基础镜像 (Base Image)、默认容器 (Default Container)
 
+**跨版本矩阵流水线 (Cross-Version Matrix Pipeline)**:
+在持续集成（CI）层针对受支持的 Python 版本（3.10、3.11、3.12）并行执行依赖同步与完整测试套件的质量门禁。配合静态分析（Ruff）与类型推断（Mypy），确保代码在全生命周期内满足跨版本生态兼容性。  
+_避免使用_: 单一测试脚本 (Single Test Script)、多版本构建器 (Multi-Version Builder)
+
+**多架构容器镜像分发 (Multi-Arch Container Distribution)**:
+在版本发布阶段通过 Docker Buildx 与 QEMU 自动化构建并推送至 GitHub Container Registry (`ghcr.io`) 的双架构（amd64 与 arm64）官方镜像服务。  
+_避免使用_: 容器备份 (Container Backup)、镜像仓库 (Image Registry)
+
+**自动化变更提取器 (Automated Changelog Extractor)**:
+基于 `git-cliff` 与 Conventional Commits 提交历史，在版本打标时自动化解析提交范围、过滤非规范提交并结构化生成 Release 笔记与发行日志的工具组件。  
+_避免使用_: 日志生成脚本 (Log Script)、版本总结器 (Version Summarizer)
+
+**语义化 PR 门禁 (Semantic Pull Request Gate)**:
+在 GitHub 协作入口对贡献者发起的 Pull Request 标题施加的规范校验流程，强制标题符合 Conventional Commits 规范，保障版本日志生成的确定性。  
+_避免使用_: 标题校验器 (Title Validator)、PR 规则检查 (PR Rule Check)
+
+

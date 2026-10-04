@@ -4,6 +4,29 @@
 
 ---
 
+## [1.0.1] - 2026-10-04
+
+### 🚀 现代化开源工程套件与 CI/CD 流水线 (Engineering Integration)
+
+- **持续集成 (CI)**：
+  - 引入 `.github/workflows/ci.yml`，集成 Conventional Commits PR 标题语义化校验门禁；
+  - 接入基于 `uv` 的极速代码质检（Ruff 规范检查、Ruff 格式化自检与 Mypy 静态类型推断）；
+  - 配置 Python `["3.10", "3.11", "3.12"]` 跨版本矩阵并行测试，保障多版本生态绝对健壮性。
+- **自动化发版流水线 (Release)**：
+  - 引入 All-in-One 自动化流水线 `.github/workflows/release.yml`，推送 `v*` Tag 自动触发；
+  - 引入 `git-cliff` 自动根据提交历史提取结构化变更日志（`.cliff.toml`）；
+  - 自动化构建并挂载 Python Wheel 与 Tarball 发行物至 GitHub Release；
+  - 自动化发布包至 PyPI 官方中心仓库并下线旧版独立 `publish.yml`；
+  - 自动化构建 `linux/amd64` 与 `linux/arm64` 双架构生产镜像并推送到 GitHub Container Registry (`ghcr.io/atengk/mcp-server-redis`)。
+- **协作规范与工程基线**：
+  - 引入 `.editorconfig` 统一跨 IDE 编码与排版规范；
+  - 强化 `.gitattributes` 全局推行跨平台文本 `eol=lf` 归一化；
+  - 引入结构化社区模版：`bug_report.md`、`feature_request.md` 与包含安全红线检查的 `PULL_REQUEST_TEMPLATE.md`；
+  - 融合版 `CONTRIBUTING.md` 贡献指南与 README 开源徽章组；
+  - 沉淀架构决策记录 `ADR-0009: 开源工程化模版集成与现代自动化流水线架构`。
+
+---
+
 ## [1.0.0] - 2026-10-04
 
 ### 🌟 首发生产级特性 (Production Release)

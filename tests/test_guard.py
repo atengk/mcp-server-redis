@@ -103,4 +103,3 @@ def test_dual_write_gate_blocks_none_profile() -> None:
     guard = SecurityGuard(allow_write=True)
     with pytest.raises(ReadOnlyConnectionError, match="未提供有效的连接档案"):
         guard.check_write_permission(None)  # type: ignore[arg-type]
-

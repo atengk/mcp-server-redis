@@ -53,9 +53,7 @@ async def redis_stream_read(
             "is_truncated": False,
         }
 
-    effective_count = (
-        min(max(count, 1), MAX_STREAM_COUNT) if count > 0 else DEFAULT_STREAM_COUNT
-    )
+    effective_count = min(max(count, 1), MAX_STREAM_COUNT) if count > 0 else DEFAULT_STREAM_COUNT
     client = registry.get_client(alias=connection, db=db)
 
     try:
@@ -103,9 +101,7 @@ async def redis_stream_read(
         fields_dict: dict[str, Any] = {}
         for f_raw, v_raw in raw_fields.items():
             f_str = (
-                f_raw.decode("utf-8", errors="replace")
-                if isinstance(f_raw, bytes)
-                else str(f_raw)
+                f_raw.decode("utf-8", errors="replace") if isinstance(f_raw, bytes) else str(f_raw)
             )
             serialized = SafeSerializer.serialize_value(v_raw)
             fields_dict[f_str] = serialized.unwrap()
