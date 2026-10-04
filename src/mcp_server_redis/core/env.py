@@ -35,6 +35,10 @@ _DEFAULT_TRANSPORT: Final[str] = "stdio"
 _DEFAULT_SERVER_HOST: Final[str] = "0.0.0.0"
 # 默认服务监听端口保底值
 _DEFAULT_SERVER_PORT: Final[int] = 8000
+# 默认 Socket 连接超时保底值（秒）
+_DEFAULT_CONNECT_TIMEOUT: Final[float] = 3.0
+# 默认 Socket 指令执行超时保底值（秒）
+_DEFAULT_SOCKET_TIMEOUT: Final[float] = 5.0
 
 
 def load_dotenv_if_exists(dotenv_path: Path | str | None = None) -> bool:
@@ -283,6 +287,50 @@ def resolve_server_port_from_env() -> int:
             _DEFAULT_SERVER_PORT,
         )
         return _DEFAULT_SERVER_PORT
+
+
+def resolve_connect_timeout_from_env() -> float:
+    """从环境变量解析 Redis Socket 连接超时时间（秒）。
+
+    读取 `MCP_REDIS_CONNECT_TIMEOUT` 环境变量，非法或缺失时返回 3.0。
+
+    @return 连接超时秒数
+    """
+    val = os.getenv("MCP_REDIS_CONNECT_TIMEOUT")
+    if not val:
+        return _DEFAULT_CONNECT_TIMEOUT
+    try:
+        parsed = float(val.strip())
+        return parsed if parsed > 0 else _DEFAULT_CONNECT_TIMEOUT
+    except ValueError:
+        logger.warning(
+            "环境变量 MCP_REDIS_CONNECT_TIMEOUT 格式非法 ('%s')，降级为默认值 %.1f",
+            val,
+            _DEFAULT_CONNECT_TIMEOUT,
+        )
+        return _DEFAULT_CONNECT_TIMEOUT
+
+
+def resolve_socket_timeout_from_env() -> float:
+    """从环境变量解析 Redis Socket 指令超时时间（秒）。
+
+    优先读取 `MCP_REDIS_SOCKET_TIMEOUT` 或 `MCP_REDIS_TIMEOUT` 环境变量，非法或缺失时返回 5.0。
+
+    @return 指令超时秒数
+    """
+    val = os.getenv("MCP_REDIS_SOCKET_TIMEOUT") or os.getenv("MCP_REDIS_TIMEOUT")
+    if not val:
+        return _DEFAULT_SOCKET_TIMEOUT
+    try:
+        parsed = float(val.strip())
+        return parsed if parsed > 0 else _DEFAULT_SOCKET_TIMEOUT
+    except ValueError:
+        logger.warning(
+            "环境变量 MCP_REDIS_SOCKET_TIMEOUT 格式非法 ('%s')，降级为默认值 %.1f",
+            val,
+            _DEFAULT_SOCKET_TIMEOUT,
+        )
+        return _DEFAULT_SOCKET_TIMEOUT
 
 
 class ServerConfig(NamedTuple):

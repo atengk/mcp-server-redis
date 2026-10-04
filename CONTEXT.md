@@ -77,3 +77,20 @@ _避免使用_: 参数读取器 (Param Reader)、环境覆盖器 (Env Overrider)
 **离散参数组装器 (Discrete Parameters Synthesizer)**:
 将 `MCP_REDIS_HOST`、`MCP_REDIS_PORT`、`MCP_REDIS_PASSWORD`、`MCP_REDIS_DB` 等零散字段安全拼装为标准 Redis URL，并自动对密码中的特殊字符执行 Percent-Encoding 编码的防御单元。  
 _避免使用_: URL 拼接函数 (URL Concatenator)、连接串生成器 (URL Generator)
+
+**分片集群自适应驱动 (Cluster Adaptive Driver)**:
+基于协议头 `redis-cluster://` / `rediss-cluster://`、环境变量 `MCP_REDIS_CLUSTER` 或多实例配置 `cluster: true` 自动探测并装配的 `redis.asyncio.cluster.RedisCluster` 客户端驱动。自动遵循集群单库不变量（强制重置绑定 `db=0`）并完成生命周期释放。  
+_避免使用_: 集群代理 (Cluster Proxy)、分片包装器 (Sharding Wrapper)
+
+**跨槽安全防御 (Cross-Slot Guard)**:
+针对 Redis Cluster 分布式哈希槽分布施加的防御机制。在物理删除（`redis_delete_keys`）与探活阶段将多键批处理安全降级为基于 `asyncio.gather` 的并发单键独立请求，物理切断 `CROSSSLOT` 跨槽异常崩溃风险并杜绝串行网络 N+1 开销；在键检索阶段通过 `scan_iter` 遍历全部分片节点聚合键集合。  
+_避免使用_: 槽位重定向 (Slot Redirection)、跨槽补丁 (Cross-Slot Patch)
+
+**双模传输网关 (Dual Transport Gateway)**:
+在服务装配层建立的双协议传输抽象。默认以极简原生 Stdio 管道保证已有客户端配置的 100% 严格向后兼容，亦支持通过 `--transport sse`（及 `--host`、`--port`）切换为常驻 HTTP Server-Sent Events 服务端，满足微服务与远程大模型协作需求。  
+_避免使用_: 网络代理 (Network Proxy)、协议转换器 (Protocol Converter)
+
+**非 Root 生产容器 (Non-Root Production Container)**:
+基于 `python:3.11-slim` 底座与 `uv` 极速多阶段构建的生产安全容器镜像。剥离包编译器，镜像体积严格收敛于 150MB 以内；运行阶段强制下沉为专有非 root 账户 `appuser` (UID: 10001) 并禁用交互 Shell，符合企业最小权限与合规审计基线。  
+_避免使用_: 基础镜像 (Base Image)、默认容器 (Default Container)
+

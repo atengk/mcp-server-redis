@@ -99,6 +99,16 @@ uv sync
 uv run atengk-mcp-server-redis --url "redis://localhost:6379/0"
 ```
 
+### 方式 4：使用 Docker 容器化运行
+
+```bash
+# 瞬态交互运行（stdio 管道）
+docker run -i --rm -e MCP_REDIS_URL="redis://host.docker.internal:6379/0" atengk/mcp-server-redis:1.0.0 --transport stdio
+
+# 常驻后台 HTTP SSE 服务端（暴露 8000 端口）
+docker-compose up -d
+```
+
 ---
 
 ## 🔌 MCP 客户端通用集成配置
@@ -190,23 +200,161 @@ uv run atengk-mcp-server-redis --url "redis://localhost:6379/0"
 }
 ```
 
+### 4. 使用 Docker 容器挂载 (免安装本地环境)
+
+若希望在没有 Python 环境的宿主机上直接通过容器提供 MCP 能力：
+
+```json
+{
+  "mcpServers": {
+    "redis-docker": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "MCP_REDIS_URL=redis://host.docker.internal:6379/0",
+        "-e",
+        "MCP_REDIS_ALLOW_WRITE=true",
+        "atengk/mcp-server-redis:1.0.0",
+        "--transport",
+        "stdio"
+      ]
+    }
+  }
+}
+```
+
+---
+
+## 🐳 Docker 容器化运行与微服务编排
+
+本项目提供工业级轻量化标准容器制品与单服务编排清单，全面兼顾本地终端调试与微服务常驻运行。
+
+### 核心镜像安全基线
+- **极速精简多阶段构建**：基于 `python:3.11-slim` 底座与 `uv` 高速依赖预缓存，完全剥离包编译器，产出镜像体积严格 $< 150\text{MB}$；
+- **非 Root 生产安全账号**：容器内以专有非 root 账户 `appuser` (UID: `10001`, GID: `10001`) 运行，并锁定登录 Shell（`/usr/sbin/nologin`），满足企业最小权限与容器合规审计；
+- **开箱即用常驻网关**：默认入口命令为 `atengk-mcp-server-redis`，默认暴露端口 `8000` 并以 HTTP SSE 传输网关模式常驻运行。
+
+### 使用 docker-compose 常驻部署 (SSE 模式)
+
+工程根目录预置了生产级 [docker-compose.yml](./docker-compose.yml)：
+
+```bash
+# 后台常驻启动 MCP SSE 服务端
+docker-compose up -d
+
+# 检视实时服务日志
+docker-compose logs -f
+```
+
+容器启动后，MCP 服务端将在宿主机 `http://localhost:8000/sse` 持续监听。各大支持远程 SSE 协议的 MCP 客户端（如 Cherry Studio、远程 Web AI 网关等）只需直接填写该 URL 即可挂载。
+
+> [!TIP]
+> **宿主机网络互通**：`docker-compose.yml` 内建了 `host.docker.internal:host-gateway` 跨平台解析，容器内配置 `MCP_REDIS_URL=redis://host.docker.internal:6379/0` 即可直接连通 Linux、macOS 或 Windows 宿主机上运行的外部 Redis 服务。
+
+---
+
+## 🌐 Redis Cluster 分片集群接入指南
+
+服务全面内建对 Redis Cluster 分片集群（基于 16384 哈希槽架构）的原生自适应识别与驱动治理。
+
+### 1. 协议头与连接配置
+
+系统自适应探测以下任意一种集群配置方式并自动激活 `RedisCluster` 驱动：
+- **专用协议头**：连接 URL 采用 `redis-cluster://` 或 `rediss-cluster://`（如 `redis-cluster://cluster.internal:6379`）；
+- **环境变量**：注入 `MCP_REDIS_CLUSTER=true`；
+- **CLI 命令行**：启动时显式附带 `--cluster` 参数；
+- **多实例配置**：在 YAML 连接档案中声明 `cluster: true`。
+
+```bash
+# 命令行启动集群只读模式
+uvx atengk-mcp-server-redis --url "redis-cluster://10.0.0.1:6379"
+
+# 环境变量启动集群并开启写权限
+uvx atengk-mcp-server-redis --url "redis://10.0.0.1:6379" --cluster --allow-write
+```
+
+### 2. 生产级集群不变量与安全防御
+
+- 🛡️ **单一数据库 (DB 0) 强制防御契约**：
+  Redis Cluster 规范物理移除了多逻辑库概念，仅支持 0 号库。当调用工具时误传 `db=1~15` 或 URL 中含有 `/<db>` 路径，服务底层自动执行**深度防御**：物理剥除 URL 中的路径，自动记录审计告警并重置绑定至 `db=0`，绝不因切库异常抛出 `ResponseError: SELECT is not allowed in cluster mode` 导致会话中断。
+- 🛡️ **跨槽 (Cross-Slot) 安全防御与并发提速**：
+  在分片集群中，批量键操作若分散在不同槽位会触发原生 Redis 崩溃报错（`CROSSSLOT Keys in request don't hash to the same slot`）。本服务构建了严密的多键安全屏障：
+  - **物理删除 (`redis_delete_keys`)**：底层检测到集群模式或捕获到 `CROSSSLOT` 异常时，自动将批处理安全收敛为基于 `asyncio.gather` 的并发单键独立请求，在彻底阻断跨槽崩溃的同时消除了串行网络 N+1 开销；
+  - **探活安全降级**：未确认删除前的 Pipeline 批量探活若发生集群异常，自动降级为并发逐键存在性探测。
+- 🔍 **全节点聚合扫描 (`redis_scan_keys`)**：
+  集群模式自适应切换至 `client.scan_iter` 机制，自动轮询遍历全部分片 Master 节点并聚合匹配键集合，受条数上限（默认 50，硬上限 200）安全截断保护。
+
+---
+
+## 🚀 Stdio 与 SSE 双模传输网关
+
+本服务在应用层抽象了双模传输网关架构，一套代码兼顾本地终端进程间通信与分布式微服务网络暴露：
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │       atengk-mcp-server-redis           │
+                    │         (FastMCP 核心服务层)            │
+                    └───────────┬─────────────────┬───────────┘
+                                │                 │
+               (默认模式)       │                 │  (--transport sse)
+                                ▼                 ▼
+                    ┌──────────────────┐   ┌──────────────────┐
+                    │  标准 Stdio 管道  │   │  HTTP SSE 网关   │
+                    │  (JSON-RPC 流)   │   │  (:8000/sse 端点)│
+                    └─────────┬────────┘   └─────────┬────────┘
+                              │                      │
+                              ▼                      ▼
+                     本地大模型客户端        远程 AI 网关 / 云原生微服务
+                     (Claude/Cursor/Cline)   (Web 客户端 / 局域网协同)
+```
+
+1. **标准 Stdio 管道模式（默认）**：
+   - 默认模式，日志严格绑定至 `sys.stderr`，绝不污染 stdout 协议流，100% 严格向后兼容所有现有客户端配置；
+2. **HTTP Server-Sent Events (SSE) 服务端模式**：
+   - 通过 `--transport sse`（或 `MCP_REDIS_TRANSPORT=sse`）激活；
+   - 支持 `--host`（默认 `0.0.0.0`）与 `--port`（默认 `8000`）自定义监听绑定。
+
+```bash
+# 启动 HTTP SSE 网关监听于 0.0.0.0:8000
+uvx atengk-mcp-server-redis --transport sse --host 0.0.0.0 --port 8000
+```
+
 ---
 
 ## 🌍 环境变量完整参考 (Environment Variables)
 
-服务原生支持**系统级、用户级、客户端级环境变量**以及当前工作目录下的 **`.env` 文件**。所有环境变量统一遵循严格的 `MCP_REDIS_` 前缀规范，杜绝环境污染。
+服务原生支持**系统级、用户级、客户端级环境变量**以及当前工作目录下的 **`.env` 文件**。所有变量统一遵循严格的 `MCP_REDIS_` 前缀规范，杜绝环境污染。
 
-| 环境变量名 | 默认值 | 说明与示例 |
+### 1. 连接与认证配置
+| 环境变量名 | 默认值 | 作用与用法示例 |
 | :--- | :--- | :--- |
-| `MCP_REDIS_URL` | - | 完整 Redis 连接 URL，如 `redis://:pass@host:6379/0`。若显式提供，优先级高于离散变量。 |
+| `MCP_REDIS_URL` | - | 完整 Redis 连接 URL（如 `redis://:pass@host:6379/0` 或 `redis-cluster://node:6379`）。若显式提供，优先级高于离散变量 |
 | `MCP_REDIS_HOST` | `localhost` | Redis 主机名或 IP 地址（如 `103.236.97.210`） |
 | `MCP_REDIS_PORT` | `6379` | Redis 端口号（如 `6379` 或 `63730`） |
 | `MCP_REDIS_PASSWORD` | - | Redis 访问凭据。**支持任意特殊字符明文，底层自动 URL 编码防截断** |
 | `MCP_REDIS_DB` | `0` | 默认逻辑数据库编号（`0~15`） |
 | `MCP_REDIS_USERNAME` | - | ACL 认证用户名（可选） |
-| `MCP_REDIS_CONFIG` | - | 多实例连接配置文件路径（映射 `--config` 参数） |
-| `MCP_REDIS_ALLOW_WRITE` | `false` | 正向显式授权写权限。值为 `true`、`1`、`yes`、`on` 时生效 |
+
+### 2. 集群与传输网关配置
+| 环境变量名 | 默认值 | 作用与用法示例 |
+| :--- | :--- | :--- |
+| `MCP_REDIS_CLUSTER` | `false` | 激活 Redis Cluster 分片集群模式。取值为 `true`、`1`、`yes`、`on` 时生效 |
+| `MCP_REDIS_TRANSPORT` | `stdio` | 传输协议模式。可选 `stdio` 或 `sse`（大小写不敏感） |
+| `MCP_REDIS_SERVER_HOST` | `0.0.0.0` | SSE 传输网关绑定的监听主机地址 |
+| `MCP_REDIS_SERVER_PORT` | `8000` | SSE 传输网关绑定的 HTTP 监听端口 |
+
+### 3. 安全权限与网络治理
+| 环境变量名 | 默认值 | 作用与用法示例 |
+| :--- | :--- | :--- |
+| `MCP_REDIS_ALLOW_WRITE` | `false` | 正向显式授权写权限。值为 `true`、`1`、`yes`、`on` 时开启写操作 |
 | `MCP_REDIS_READ_ONLY` | `true` | 反向只读控制。显式设为 `false`、`0`、`no`、`off` 时解除只读并开启写权限 |
+| `MCP_REDIS_LOG_LEVEL` | `INFO` | 运行时日志输出级别。支持 `DEBUG`、`INFO`、`WARNING`、`ERROR`（日志严格绑定至 stderr） |
+| `MCP_REDIS_CONNECT_TIMEOUT` | `3.0` | Socket 连接超时保底时间（秒），防止节点宕机网络挂死 |
+| `MCP_REDIS_SOCKET_TIMEOUT` | `5.0` | Socket 指令执行超时保底时间（秒），亦支持别名 `MCP_REDIS_TIMEOUT` |
+| `MCP_REDIS_CONFIG` | - | 多实例连接配置文件路径（映射 `--config` 参数） |
 
 ### 配置优先级裁决顺序 (Precedence)
 1. **最高优先级**：CLI 命令行参数（`--url` / `--config` / `--allow-write`）；

@@ -19,6 +19,11 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 from redis.asyncio.cluster import RedisCluster
 
+from mcp_server_redis.core.env import (
+    resolve_connect_timeout_from_env,
+    resolve_socket_timeout_from_env,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,11 +103,13 @@ class ConnectionProfile(BaseModel):
     description: str = ""
     db: int = Field(default=0, ge=0, le=15)
     is_cluster: bool = False
+    socket_connect_timeout: float = 3.0
+    socket_timeout: float = 5.0
 
     @model_validator(mode="before")
     @classmethod
     def populate_defaults_from_url(cls, data: Any) -> Any:
-        """从 URL 自动推断缺省的数据库编号与集群协议自适应归一化。"""
+        """从 URL 自动推断缺省的数据库编号、集群协议自适应归一化及超时保底决议。"""
         if isinstance(data, dict):
             url = data.get("url", "")
             if isinstance(url, str):
@@ -113,9 +120,28 @@ class ConnectionProfile(BaseModel):
                     data["url"] = "rediss://" + url[len("rediss-cluster://") :]
                     data["is_cluster"] = True
 
+            if "socket_connect_timeout" not in data or data["socket_connect_timeout"] is None:
+                data["socket_connect_timeout"] = resolve_connect_timeout_from_env()
+            if "socket_timeout" not in data or data["socket_timeout"] is None:
+                data["socket_timeout"] = resolve_socket_timeout_from_env()
+
             if data.get("is_cluster") or data.get("cluster"):
                 data["is_cluster"] = True
                 data["db"] = 0
+                # 剥除集群 URL 中可能携带的 /<db> 路径
+                current_url = data.get("url", "")
+                if isinstance(current_url, str) and current_url:
+                    parsed_u = urllib.parse.urlsplit(current_url)
+                    if parsed_u.path and parsed_u.path != "/":
+                        data["url"] = urllib.parse.urlunsplit(
+                            (
+                                parsed_u.scheme,
+                                parsed_u.netloc,
+                                "",
+                                parsed_u.query,
+                                parsed_u.fragment,
+                            )
+                        )
             elif "db" not in data and url:
                 parsed_db = _extract_db_from_url(url)
                 if parsed_db is not None:
@@ -132,7 +158,8 @@ class ConnectionProfile(BaseModel):
         return (
             f"ConnectionProfile(alias='{self.alias}', url='{self.masked_url}', "
             f"readonly={self.readonly}, db={self.db}, is_cluster={self.is_cluster}, "
-            f"description='{self.description}')"
+            f"socket_connect_timeout={self.socket_connect_timeout}, "
+            f"socket_timeout={self.socket_timeout}, description='{self.description}')"
         )
 
 
@@ -148,6 +175,8 @@ class _RawConnectionEntry(BaseModel):
     description: str = ""
     db: int | None = Field(default=None, ge=0, le=15)
     cluster: bool = False
+    socket_connect_timeout: float | None = None
+    socket_timeout: float | None = None
 
 
 class _RawConfigFile(BaseModel):
@@ -267,6 +296,10 @@ class ConnectionRegistry:
             cluster_client = RedisCluster.from_url(
                 cluster_url,
                 decode_responses=False,
+                socket_connect_timeout=profile.socket_connect_timeout,
+                socket_timeout=profile.socket_timeout,
+                cluster_error_retry_attempts=3,
+                retry_on_timeout=True,
             )
             self._clients[cache_key] = cluster_client
             return cluster_client
@@ -298,6 +331,8 @@ class ConnectionRegistry:
             new_url,
             db=target_db,
             decode_responses=False,
+            socket_connect_timeout=profile.socket_connect_timeout,
+            socket_timeout=profile.socket_timeout,
         )
         self._clients[cache_key] = client
         return client
@@ -319,6 +354,8 @@ class ConnectionRegistry:
         readonly: bool = True,
         description: str = "",
         is_cluster: bool = False,
+        socket_connect_timeout: float | None = None,
+        socket_timeout: float | None = None,
     ) -> "ConnectionRegistry":
         """从单个 Redis URL 构造极简连接注册中心。
 
@@ -327,16 +364,24 @@ class ConnectionRegistry:
         @param readonly 是否只读，默认 True
         @param description 连接描述
         @param is_cluster 是否开启 Redis Cluster 分片集群模式，默认 False
+        @param socket_connect_timeout Socket 连接超时秒数（可选）
+        @param socket_timeout Socket 指令超时秒数（可选）
         @return 已装配好默认连接的注册中心实例
         """
         registry = cls(default_alias=alias)
-        profile = ConnectionProfile(
-            alias=alias,
-            url=url,
-            readonly=readonly,
-            description=description,
-            is_cluster=is_cluster,
-        )
+        profile_kwargs: dict[str, Any] = {
+            "alias": alias,
+            "url": url,
+            "readonly": readonly,
+            "description": description,
+            "is_cluster": is_cluster,
+        }
+        if socket_connect_timeout is not None:
+            profile_kwargs["socket_connect_timeout"] = socket_connect_timeout
+        if socket_timeout is not None:
+            profile_kwargs["socket_timeout"] = socket_timeout
+
+        profile = ConnectionProfile.model_validate(profile_kwargs)
         registry.register(profile, is_default=True)
         return registry
 
@@ -388,6 +433,10 @@ class ConnectionRegistry:
             }
             if entry.db is not None:
                 profile_kwargs["db"] = entry.db
+            if entry.socket_connect_timeout is not None:
+                profile_kwargs["socket_connect_timeout"] = entry.socket_connect_timeout
+            if entry.socket_timeout is not None:
+                profile_kwargs["socket_timeout"] = entry.socket_timeout
 
             profile = ConnectionProfile.model_validate(profile_kwargs)
             registry.register(profile, is_default=(alias == config.default))
