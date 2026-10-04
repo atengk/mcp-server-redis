@@ -6,7 +6,7 @@ FastMCP 服务主装配与 CLI 参数解析端到端集成测试。
 """
 
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from mcp.server.mcpserver.exceptions import UnexpectedToolError
@@ -16,6 +16,7 @@ from mcp_server_redis.server import (
     SERVER_VERSION,
     build_argument_parser,
     create_app,
+    main,
     parse_cli_arguments,
 )
 
@@ -91,17 +92,19 @@ def test_build_argument_parser_defaults() -> None:
     assert args.url is None
     assert args.config is None
     assert args.allow_write is False
+    assert args.log_level is None
 
 
 def test_parse_cli_arguments_custom_values() -> None:
     """验证解析自定义命令行参数。"""
     config_dict = parse_cli_arguments(
-        ["--url", "redis://127.0.0.1:6380/2", "--allow-write"]
+        ["--url", "redis://127.0.0.1:6380/2", "--allow-write", "--log-level", "debug"]
     )
 
     assert config_dict["url"] == "redis://127.0.0.1:6380/2"
     assert config_dict["config"] is None
     assert config_dict["allow_write"] is True
+    assert config_dict["log_level"] == "DEBUG"
 
 
 def test_parse_cli_arguments_with_config_file(tmp_path: Path) -> None:
@@ -112,6 +115,18 @@ def test_parse_cli_arguments_with_config_file(tmp_path: Path) -> None:
     config_dict = parse_cli_arguments(["--config", str(cfg_file)])
     assert config_dict["config"] == str(cfg_file)
     assert config_dict["allow_write"] is False
+    assert config_dict["log_level"] is None
+
+
+def test_parse_cli_arguments_log_level_choices() -> None:
+    """验证 --log-level 支持大小写不敏感解析并限制合法选项。"""
+    for choice in ["DEBUG", "info", "Warning", "ERROR"]:
+        res = parse_cli_arguments(["--log-level", choice])
+        assert res["log_level"] == choice.upper()
+
+    with pytest.raises(SystemExit):
+        parse_cli_arguments(["--log-level", "INVALID_LEVEL"])
+
 
 
 @pytest.mark.asyncio
@@ -126,3 +141,18 @@ async def test_app_cleanup_closes_connection_pools() -> None:
         registry.aclose = mock_aclose
 
     mock_aclose.assert_awaited_once()
+
+
+def test_main_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 main() 入口正确解析命令行参数、配置日志并启动服务。"""
+    monkeypatch.setattr(
+        "sys.argv",
+        ["mcp-server-redis", "--log-level", "DEBUG", "--url", "redis://localhost:6379/1"],
+    )
+    with patch("mcp_server_redis.server.create_app") as mock_create_app:
+        mock_app = MagicMock()
+        mock_create_app.return_value = mock_app
+        main()
+        mock_create_app.assert_called_once()
+        mock_app.run.assert_called_once()
+

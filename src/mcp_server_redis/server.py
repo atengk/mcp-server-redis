@@ -9,7 +9,6 @@ FastMCP 服务主装配与 CLI 命令行协议入口。
 
 import argparse
 import logging
-import os
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -21,9 +20,10 @@ from mcp.server import MCPServer
 FastMCP = MCPServer
 
 # 服务端版本号常量
-SERVER_VERSION: Final[str] = "0.1.0"
+SERVER_VERSION: Final[str] = "1.0.0"
 
 from mcp_server_redis.core.connection import ConnectionRegistry
+from mcp_server_redis.core.env import ServerConfig, resolve_server_configuration
 from mcp_server_redis.core.guard import SecurityGuard
 from mcp_server_redis.tools.admin import register_admin_tools
 from mcp_server_redis.tools.hashes import register_hash_tools
@@ -51,19 +51,26 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--url",
         type=str,
         default=None,
-        help="单个 Redis 连接 URL（如 redis://localhost:6379/0，默认读取 REDIS_URL 环境变量）",
+        help="单个 Redis 连接 URL（默认读取 MCP_REDIS_URL 或 MCP_REDIS_HOST/PORT 等环境变量）",
     )
     parser.add_argument(
         "--config",
         type=str,
         default=None,
-        help="多实例连接配置文件路径（支持 YAML / JSON）",
+        help="多实例连接配置文件路径（默认读取 MCP_REDIS_CONFIG 环境变量，支持 YAML / JSON）",
     )
     parser.add_argument(
         "--allow-write",
         action="store_true",
         default=False,
-        help="显式开启写操作权限（默认全局强只读保护）",
+        help="显式开启写操作权限（默认全局强只读，支持通过 MCP_REDIS_ALLOW_WRITE=true 或 MCP_REDIS_READ_ONLY=false 开启）",
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default=None,
+        help="运行时日志级别（DEBUG、INFO、WARNING、ERROR，默认读取 MCP_REDIS_LOG_LEVEL 或默认 INFO）",
     )
     return parser
 
@@ -72,7 +79,7 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
     """解析命令行参数或传入参数列表。
 
     @param args 可选自定义参数列表，缺省时读取 sys.argv[1:]
-    @return 包含 url, config, allow_write 键的配置字典
+    @return 包含 url, config, allow_write, log_level 键的配置字典
     """
     parser = build_argument_parser()
     parsed = parser.parse_args(args)
@@ -80,6 +87,7 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
         "url": parsed.url,
         "config": parsed.config,
         "allow_write": parsed.allow_write,
+        "log_level": parsed.log_level,
     }
 
 
@@ -87,25 +95,39 @@ def create_app(
     url: str | None = None,
     config: str | None = None,
     allow_write: bool = False,
+    log_level: str | None = None,
+    server_config: ServerConfig | None = None,
 ) -> FastMCP:
     """工厂函数：根据配置初始化连接注册中心、安全守卫并装配全部 18 个 MCP 工具。
+
+    支持多层级配置决议：CLI 显式参数 > 环境变量整串/离散参数 > 本地 .env > 系统保底默认。
 
     @param url 单实例 Redis 连接串（可选）
     @param config 多实例配置文件路径（可选）
     @param allow_write 是否开启写操作权限（默认 False）
+    @param log_level 运行时日志级别（可选）
+    @param server_config 预决议完成的服务端配置对象（可选，若提供则优先采用，避免二次决议）
     @return 已经完成全部工具装配与生命周期绑定的 FastMCP 实例
     """
+    # 0. 综合决议配置优先级（若已传入预决议对象直接复用，否则启动全量决议）
+    effective_config = server_config or resolve_server_configuration(
+        cli_url=url,
+        cli_config=config,
+        cli_allow_write=allow_write,
+        cli_log_level=log_level,
+    )
+
     # 1. 初始化连接注册中心 (ConnectionRegistry)
-    if config:
-        registry = ConnectionRegistry.from_file(config)
+    if effective_config.config:
+        registry = ConnectionRegistry.from_file(effective_config.config)
     else:
-        target_url: str = (
-            url if url else (os.getenv("REDIS_URL") or "redis://localhost:6379/0")
+        registry = ConnectionRegistry.from_url(
+            url=effective_config.url,
+            readonly=not effective_config.allow_write,
         )
-        registry = ConnectionRegistry.from_url(url=target_url, readonly=not allow_write)
 
     # 2. 初始化安全守卫 (SecurityGuard)
-    guard = SecurityGuard(allow_write=allow_write)
+    guard = SecurityGuard(allow_write=effective_config.allow_write)
 
     # 3. 构建生命周期管理器以管理资源优雅释放
     @asynccontextmanager
@@ -139,18 +161,29 @@ def create_app(
 
 def main() -> None:
     """CLI 主启动入口。"""
+    config_dict = parse_cli_arguments()
+    server_config = resolve_server_configuration(
+        cli_url=config_dict["url"],
+        cli_config=config_dict["config"],
+        cli_allow_write=config_dict["allow_write"],
+        cli_log_level=config_dict["log_level"],
+    )
+
+    # 动态设置日志级别，输出流严格绑定 sys.stderr，杜绝污染 stdout 协议流
+    numeric_level = getattr(logging, server_config.log_level, logging.INFO)
     logging.basicConfig(
-        level=logging.INFO,
+        level=numeric_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         stream=sys.stderr,
+        force=True,
     )
-    config_dict = parse_cli_arguments()
-    app = create_app(
-        url=config_dict["url"],
-        config=config_dict["config"],
-        allow_write=config_dict["allow_write"],
-    )
+    logging.getLogger().setLevel(numeric_level)
+    logger.setLevel(numeric_level)
+
+    app = create_app(server_config=server_config)
     app.run()
+
+
 
 
 if __name__ == "__main__":
