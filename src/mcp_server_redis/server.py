@@ -20,7 +20,7 @@ from mcp.server import MCPServer
 FastMCP = MCPServer
 
 # 服务端版本号常量
-SERVER_VERSION: Final[str] = "1.0.1"
+SERVER_VERSION: Final[str] = "1.0.2"
 
 from mcp_server_redis.core.connection import ConnectionRegistry
 from mcp_server_redis.core.env import ServerConfig, resolve_server_configuration
