@@ -93,18 +93,36 @@ def test_build_argument_parser_defaults() -> None:
     assert args.config is None
     assert args.allow_write is False
     assert args.log_level is None
+    assert args.transport is None
+    assert args.host is None
+    assert args.port is None
 
 
 def test_parse_cli_arguments_custom_values() -> None:
     """验证解析自定义命令行参数。"""
     config_dict = parse_cli_arguments(
-        ["--url", "redis://127.0.0.1:6380/2", "--allow-write", "--log-level", "debug"]
+        [
+            "--url",
+            "redis://127.0.0.1:6380/2",
+            "--allow-write",
+            "--log-level",
+            "debug",
+            "--transport",
+            "SSE",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8888",
+        ]
     )
 
     assert config_dict["url"] == "redis://127.0.0.1:6380/2"
     assert config_dict["config"] is None
     assert config_dict["allow_write"] is True
     assert config_dict["log_level"] == "DEBUG"
+    assert config_dict["transport"] == "sse"
+    assert config_dict["host"] == "127.0.0.1"
+    assert config_dict["port"] == 8888
 
 
 def test_parse_cli_arguments_with_config_file(tmp_path: Path) -> None:
@@ -116,6 +134,9 @@ def test_parse_cli_arguments_with_config_file(tmp_path: Path) -> None:
     assert config_dict["config"] == str(cfg_file)
     assert config_dict["allow_write"] is False
     assert config_dict["log_level"] is None
+    assert config_dict["transport"] is None
+    assert config_dict["host"] is None
+    assert config_dict["port"] is None
 
 
 def test_parse_cli_arguments_log_level_choices() -> None:
@@ -126,6 +147,16 @@ def test_parse_cli_arguments_log_level_choices() -> None:
 
     with pytest.raises(SystemExit):
         parse_cli_arguments(["--log-level", "INVALID_LEVEL"])
+
+
+def test_parse_cli_arguments_transport_choices() -> None:
+    """验证 --transport 支持大小写不敏感解析并限制合法选项。"""
+    for choice in ["stdio", "STDIO", "sse", "SSE"]:
+        res = parse_cli_arguments(["--transport", choice])
+        assert res["transport"] == choice.lower()
+
+    with pytest.raises(SystemExit):
+        parse_cli_arguments(["--transport", "websocket"])
 
 
 
@@ -143,8 +174,8 @@ async def test_app_cleanup_closes_connection_pools() -> None:
     mock_aclose.assert_awaited_once()
 
 
-def test_main_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    """验证 main() 入口正确解析命令行参数、配置日志并启动服务。"""
+def test_main_entrypoint_stdio(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 main() 入口默认以 stdio 模式启动服务。"""
     monkeypatch.setattr(
         "sys.argv",
         ["mcp-server-redis", "--log-level", "DEBUG", "--url", "redis://localhost:6379/1"],
@@ -154,5 +185,32 @@ def test_main_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
         mock_create_app.return_value = mock_app
         main()
         mock_create_app.assert_called_once()
-        mock_app.run.assert_called_once()
+        mock_app.run.assert_called_once_with(transport="stdio")
+
+
+def test_main_entrypoint_sse_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 main() 入口在显式指定 --transport sse 时启动 HTTP SSE 网关。"""
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "mcp-server-redis",
+            "--transport",
+            "sse",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8080",
+        ],
+    )
+    with patch("mcp_server_redis.server.create_app") as mock_create_app:
+        mock_app = MagicMock()
+        mock_create_app.return_value = mock_app
+        main()
+        mock_create_app.assert_called_once()
+        mock_app.run.assert_called_once_with(
+            transport="sse",
+            host="127.0.0.1",
+            port=8080,
+        )
+
 

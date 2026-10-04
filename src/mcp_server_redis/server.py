@@ -72,6 +72,25 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=None,
         help="运行时日志级别（DEBUG、INFO、WARNING、ERROR，默认读取 MCP_REDIS_LOG_LEVEL 或默认 INFO）",
     )
+    parser.add_argument(
+        "--transport",
+        type=str.lower,
+        choices=["stdio", "sse"],
+        default=None,
+        help="传输协议模式（stdio 或 sse，默认读取 MCP_REDIS_TRANSPORT 环境变量或默认 stdio）",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=None,
+        help="SSE 模式服务监听主机（默认读取 MCP_REDIS_SERVER_HOST 环境变量或默认 0.0.0.0）",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="SSE 模式服务监听端口（默认读取 MCP_REDIS_SERVER_PORT 环境变量或默认 8000）",
+    )
     return parser
 
 
@@ -79,7 +98,7 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
     """解析命令行参数或传入参数列表。
 
     @param args 可选自定义参数列表，缺省时读取 sys.argv[1:]
-    @return 包含 url, config, allow_write, log_level 键的配置字典
+    @return 包含 url, config, allow_write, log_level, transport, host, port 键的配置字典
     """
     parser = build_argument_parser()
     parsed = parser.parse_args(args)
@@ -88,6 +107,9 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
         "config": parsed.config,
         "allow_write": parsed.allow_write,
         "log_level": parsed.log_level,
+        "transport": parsed.transport,
+        "host": parsed.host,
+        "port": parsed.port,
     }
 
 
@@ -167,6 +189,9 @@ def main() -> None:
         cli_config=config_dict["config"],
         cli_allow_write=config_dict["allow_write"],
         cli_log_level=config_dict["log_level"],
+        cli_transport=config_dict["transport"],
+        cli_host=config_dict["host"],
+        cli_port=config_dict["port"],
     )
 
     # 动态设置日志级别，输出流严格绑定 sys.stderr，杜绝污染 stdout 协议流
@@ -181,7 +206,19 @@ def main() -> None:
     logger.setLevel(numeric_level)
 
     app = create_app(server_config=server_config)
-    app.run()
+
+    # 根据传输协议启动对应网关（双模传输网关）
+    if server_config.transport == "sse":
+        logger.info(
+            "mcp-server-redis 正在以 SSE 传输网关模式启动于 http://%s:%d/sse ...",
+            server_config.host,
+            server_config.port,
+        )
+        app.run(transport="sse", host=server_config.host, port=server_config.port)
+    else:
+        logger.info("mcp-server-redis 正在以标准 stdio 协议管道模式运行...")
+        app.run(transport="stdio")
+
 
 
 

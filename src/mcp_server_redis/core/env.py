@@ -27,6 +27,16 @@ _VALID_LOG_LEVELS: Final[frozenset[str]] = frozenset({"DEBUG", "INFO", "WARNING"
 # 默认日志级别保底值
 _DEFAULT_LOG_LEVEL: Final[str] = "INFO"
 
+# 允许的有效传输协议集合
+_VALID_TRANSPORTS: Final[frozenset[str]] = frozenset({"stdio", "sse"})
+# 默认传输协议保底值
+_DEFAULT_TRANSPORT: Final[str] = "stdio"
+# 默认服务绑定主机保底值
+_DEFAULT_SERVER_HOST: Final[str] = "0.0.0.0"
+# 默认服务监听端口保底值
+_DEFAULT_SERVER_PORT: Final[int] = 8000
+
+
 
 def load_dotenv_if_exists(dotenv_path: Path | str | None = None) -> bool:
     """探测并轻量加载本地 .env 文件至进程环境变量，绝不覆盖已存在的系统/用户级环境变量。
@@ -197,10 +207,79 @@ def resolve_log_level_from_env() -> str:
     return _DEFAULT_LOG_LEVEL
 
 
+def normalize_transport(
+    transport_str: str | None,
+    default: str = _DEFAULT_TRANSPORT,
+) -> str:
+    """归一化传输协议名称，未知值告警并安全降级。
+
+    @param transport_str 原始协议名称输入
+    @param default 缺省保底协议（默认 "stdio"）
+    @return 归一化后的有效协议字符串
+    """
+    if not transport_str:
+        return default
+    normalized = transport_str.strip().lower()
+    if normalized in _VALID_TRANSPORTS:
+        return normalized
+    logger.warning(
+        "传输协议取值非法 ('%s')，安全降级为默认协议 '%s'",
+        transport_str,
+        default,
+    )
+    return default
+
+
+def resolve_transport_from_env() -> str:
+    """从环境变量解析传输协议。
+
+    读取 `MCP_REDIS_TRANSPORT` 环境变量，支持 stdio、sse（大小写不敏感）。
+    若变量未设置或取值非法，安全保底返回默认值 "stdio"。
+
+    @return 归一化后的传输协议字符串（"stdio" 或 "sse"）
+    """
+    return normalize_transport(os.getenv("MCP_REDIS_TRANSPORT"))
+
+
+def resolve_server_host_from_env() -> str:
+    """从环境变量解析服务绑定主机地址。
+
+    读取 `MCP_REDIS_SERVER_HOST` 环境变量。
+    若变量未设置，安全保底返回 "0.0.0.0"。
+
+    @return 服务监听主机地址
+    """
+    val = os.getenv("MCP_REDIS_SERVER_HOST")
+    return val.strip() if val else _DEFAULT_SERVER_HOST
+
+
+def resolve_server_port_from_env() -> int:
+    """从环境变量解析服务监听端口。
+
+    读取 `MCP_REDIS_SERVER_PORT` 环境变量。
+    若变量未设置或格式非法，安全保底返回 8000。
+
+    @return 服务监听端口整数值
+    """
+    val = os.getenv("MCP_REDIS_SERVER_PORT")
+    if not val:
+        return _DEFAULT_SERVER_PORT
+
+    try:
+        return int(val.strip())
+    except ValueError:
+        logger.warning(
+            "环境变量 MCP_REDIS_SERVER_PORT 格式非法 ('%s')，降级为默认端口 %d",
+            val,
+            _DEFAULT_SERVER_PORT,
+        )
+        return _DEFAULT_SERVER_PORT
+
+
 class ServerConfig(NamedTuple):
     """服务端运行时生效配置对象。
 
-    继承自命名元组 (NamedTuple)，具备四元组解构与属性访问双重兼容性。
+    继承自命名元组 (NamedTuple)，具备元组解构与属性访问双重兼容性。
 
     @author Ateng
     @since 2026-10-04
@@ -208,12 +287,18 @@ class ServerConfig(NamedTuple):
     @property config 生效的多实例配置文件路径（或 None）
     @property allow_write 是否开启写权限
     @property log_level 生效的日志级别（如 "INFO", "DEBUG" 等）
+    @property transport 生效的传输协议（"stdio" 或 "sse"）
+    @property host SSE 监听地址（默认 "0.0.0.0"）
+    @property port SSE 监听端口（默认 8000）
     """
 
     url: str
     config: str | None
     allow_write: bool
     log_level: str
+    transport: str = _DEFAULT_TRANSPORT
+    host: str = _DEFAULT_SERVER_HOST
+    port: int = _DEFAULT_SERVER_PORT
 
 
 def resolve_server_configuration(
@@ -221,6 +306,9 @@ def resolve_server_configuration(
     cli_config: str | None = None,
     cli_allow_write: bool = False,
     cli_log_level: str | None = None,
+    cli_transport: str | None = None,
+    cli_host: str | None = None,
+    cli_port: int | None = None,
 ) -> ServerConfig:
     """统一决议服务端最终启动配置参数。
 
@@ -231,7 +319,10 @@ def resolve_server_configuration(
     @param cli_config CLI 命令行传入的 --config（可选）
     @param cli_allow_write CLI 命令行传入的 --allow-write 开关
     @param cli_log_level CLI 命令行传入的 --log-level（可选）
-    @return ServerConfig 命名元组 (url, config, allow_write, log_level)
+    @param cli_transport CLI 命令行传入的 --transport（可选）
+    @param cli_host CLI 命令行传入的 --host（可选）
+    @param cli_port CLI 命令行传入的 --port（可选）
+    @return ServerConfig 命名元组 (url, config, allow_write, log_level, transport, host, port)
     """
     # 1. 尝试探测并安全载入 .env 文件
     load_dotenv_if_exists()
@@ -260,10 +351,32 @@ def resolve_server_configuration(
     else:
         effective_log_level = resolve_log_level_from_env()
 
+    # 6. 决议生效传输协议（CLI > 环境变量 > 默认保底 stdio）
+    if cli_transport is not None:
+        effective_transport = normalize_transport(cli_transport)
+    else:
+        effective_transport = resolve_transport_from_env()
+
+    # 7. 决议生效服务绑定主机（CLI > 环境变量 > 默认保底 0.0.0.0）
+    if cli_host is not None and cli_host.strip():
+        effective_host = cli_host.strip()
+    else:
+        effective_host = resolve_server_host_from_env()
+
+    # 8. 决议生效服务监听端口（CLI > 环境变量 > 默认保底 8000）
+    if cli_port is not None:
+        effective_port = cli_port
+    else:
+        effective_port = resolve_server_port_from_env()
+
     return ServerConfig(
         url=effective_url,
         config=effective_config,
         allow_write=effective_allow_write,
         log_level=effective_log_level,
+        transport=effective_transport,
+        host=effective_host,
+        port=effective_port,
     )
+
 

@@ -15,6 +15,9 @@ from mcp_server_redis.core.env import (
     resolve_log_level_from_env,
     resolve_redis_url_from_env,
     resolve_server_configuration,
+    resolve_server_host_from_env,
+    resolve_server_port_from_env,
+    resolve_transport_from_env,
 )
 from mcp_server_redis.core.guard import SecurityGuard
 from mcp_server_redis.core.serializer import SafeSerializer
@@ -32,4 +35,7 @@ __all__ = [
     "resolve_log_level_from_env",
     "resolve_redis_url_from_env",
     "resolve_server_configuration",
+    "resolve_server_host_from_env",
+    "resolve_server_port_from_env",
+    "resolve_transport_from_env",
 ]

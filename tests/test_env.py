@@ -18,6 +18,9 @@ from mcp_server_redis.core.env import (
     resolve_log_level_from_env,
     resolve_redis_url_from_env,
     resolve_server_configuration,
+    resolve_server_host_from_env,
+    resolve_server_port_from_env,
+    resolve_transport_from_env,
 )
 
 
@@ -210,26 +213,26 @@ def test_resolve_server_configuration_cli_overrides_env() -> None:
         },
         clear=True,
     ):
-        url, config, allow_write, log_level = resolve_server_configuration(
+        res = resolve_server_configuration(
             cli_url="redis://cli.host:6379/2",
             cli_config="/path/to/cli.yaml",
             cli_allow_write=True,
             cli_log_level="DEBUG",
         )
-        assert url == "redis://cli.host:6379/2"
-        assert config == "/path/to/cli.yaml"
-        assert allow_write is True
-        assert log_level == "DEBUG"
+        assert res.url == "redis://cli.host:6379/2"
+        assert res.config == "/path/to/cli.yaml"
+        assert res.allow_write is True
+        assert res.log_level == "DEBUG"
 
 
 def test_resolve_server_configuration_fallback_defaults() -> None:
     """验证无任何传参与环境变量时落入系统安全默认配置。"""
     with patch.dict(os.environ, {}, clear=True):
-        url, config, allow_write, log_level = resolve_server_configuration()
-        assert url == "redis://localhost:6379/0"
-        assert config is None
-        assert allow_write is False
-        assert log_level == "INFO"
+        res = resolve_server_configuration()
+        assert res.url == "redis://localhost:6379/0"
+        assert res.config is None
+        assert res.allow_write is False
+        assert res.log_level == "INFO"
 
 
 def test_resolve_server_configuration_log_level_priority() -> None:
@@ -254,6 +257,56 @@ def test_resolve_server_configuration_log_level_priority() -> None:
     with patch.dict(os.environ, {}, clear=True):
         res = resolve_server_configuration(cli_log_level="INVALID")
         assert res.log_level == "INFO"
+
+
+def test_resolve_server_configuration_transport_priority() -> None:
+    """验证配置决议器对传输模式、主机与端口的优先级判定（CLI > 环境变量 > 默认保底）。"""
+    # 1. 默认缺省保底值
+    with patch.dict(os.environ, {}, clear=True):
+        res = resolve_server_configuration()
+        assert res.transport == "stdio"
+        assert res.host == "0.0.0.0"
+        assert res.port == 8000
+
+    # 2. 环境变量决议
+    with patch.dict(
+        os.environ,
+        {
+            "MCP_REDIS_TRANSPORT": "sse",
+            "MCP_REDIS_SERVER_HOST": "10.0.0.1",
+            "MCP_REDIS_SERVER_PORT": "9090",
+        },
+        clear=True,
+    ):
+        res = resolve_server_configuration()
+        assert res.transport == "sse"
+        assert res.host == "10.0.0.1"
+        assert res.port == 9090
+
+    # 3. CLI 参数绝对优先于环境变量
+    with patch.dict(
+        os.environ,
+        {
+            "MCP_REDIS_TRANSPORT": "stdio",
+            "MCP_REDIS_SERVER_HOST": "10.0.0.1",
+            "MCP_REDIS_SERVER_PORT": "9090",
+        },
+        clear=True,
+    ):
+        res = resolve_server_configuration(
+            cli_transport="sse",
+            cli_host="127.0.0.1",
+            cli_port=8080,
+        )
+        assert res.transport == "sse"
+        assert res.host == "127.0.0.1"
+        assert res.port == 8080
+
+    # 4. CLI 传入非法 transport 时回退至 stdio
+    with patch.dict(os.environ, {}, clear=True):
+        res = resolve_server_configuration(cli_transport="websocket")
+        assert res.transport == "stdio"
+
 
 
 
@@ -292,4 +345,50 @@ def test_resolve_log_level_from_env_invalid_fallback() -> None:
     for invalid_val in invalid_cases:
         with patch.dict(os.environ, {"MCP_REDIS_LOG_LEVEL": invalid_val}, clear=True):
             assert resolve_log_level_from_env() == "INFO"
+
+
+def test_resolve_transport_from_env() -> None:
+    """验证从环境变量解析传输模式，支持大小写不敏感与安全回退 stdio。"""
+    # 1. 默认缺省
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_transport_from_env() == "stdio"
+
+    # 2. 合法值测试
+    test_cases = [
+        ("stdio", "stdio"),
+        ("STDIO", "stdio"),
+        ("  stdio  ", "stdio"),
+        ("sse", "sse"),
+        ("SSE", "sse"),
+        ("  sse  ", "sse"),
+    ]
+    for raw_val, expected in test_cases:
+        with patch.dict(os.environ, {"MCP_REDIS_TRANSPORT": raw_val}, clear=True):
+            assert resolve_transport_from_env() == expected
+
+    # 3. 非法值降级
+    with patch.dict(os.environ, {"MCP_REDIS_TRANSPORT": "grpc"}, clear=True):
+        assert resolve_transport_from_env() == "stdio"
+
+
+def test_resolve_server_host_from_env() -> None:
+    """验证从环境变量解析服务绑定主机，缺省保底 0.0.0.0。"""
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_server_host_from_env() == "0.0.0.0"
+
+    with patch.dict(os.environ, {"MCP_REDIS_SERVER_HOST": "127.0.0.1"}, clear=True):
+        assert resolve_server_host_from_env() == "127.0.0.1"
+
+
+def test_resolve_server_port_from_env() -> None:
+    """验证从环境变量解析服务监听端口，非法时保底 8000。"""
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_server_port_from_env() == 8000
+
+    with patch.dict(os.environ, {"MCP_REDIS_SERVER_PORT": "9090"}, clear=True):
+        assert resolve_server_port_from_env() == 9090
+
+    with patch.dict(os.environ, {"MCP_REDIS_SERVER_PORT": "not_a_number"}, clear=True):
+        assert resolve_server_port_from_env() == 8000
+
 
