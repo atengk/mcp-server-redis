@@ -47,7 +47,7 @@ jobs:
         with:
           body: ${{ steps.git-cliff.outputs.content }}
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/*.tar.gz
             dist/*.whl
@@ -116,7 +116,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: 构建并推送多架构镜像 (amd64 / arm64)
         uses: docker/build-push-action@v5
@@ -126,5 +127,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: false # 避免生成 unknown/unknown 幽灵标签，兼容老旧 Docker 与私有 Registry 环境
+          sbom: false       # 避免生成附加 SBOM attestation，保持产物纯净最大化兼容
           cache-from: type=gha
           cache-to: type=gha,mode=max

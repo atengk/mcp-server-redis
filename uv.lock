@@ -107,7 +107,7 @@ wheels = [
 
 [[package]]
 name = "atengk-mcp-server-redis"
-version = "1.0.3"
+version = "1.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
