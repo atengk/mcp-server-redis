@@ -1,0 +1,46 @@
+# ==============================================================================
+# atengk-mcp-server-redis Docker 构建过滤规则 (.dockerignore)
+# ==============================================================================
+
+# 版本控制系统与开发环境配置
+.git/
+.gitignore
+.github/
+.idea/
+.vscode/
+
+# Python 虚拟环境与包构建分发产物
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+
+# Python 字节码与解释器运行时缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 测试套件、覆盖率与静态检查工具缓存
+tests/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 临时排查脚本、审计追溯与日志文件
+scratch/
+*.log
+*.tmp
+*.bak
+
+# 本地机密配置文件
+.env
+.env.*
+!.env.example
+
+# 操作系统临时与索引文件
+.DS_Store
+Thumbs.db

@@ -1,0 +1,36 @@
+# ==============================================================================
+# atengk-mcp-server-redis 生产级常驻 SSE 模式 Docker Compose 编排
+# ==============================================================================
+
+services:
+  mcp-server-redis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: atengk/mcp-server-redis:1.0.0
+    container_name: mcp-server-redis
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    command: ["--transport", "sse", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      # Redis 连接 URL（支持标准 redis://、rediss:// 或集群 redis-cluster://）
+      # 若连接宿主机上的 Redis 服务，可使用 host.docker.internal
+      - MCP_REDIS_URL=redis://host.docker.internal:6379/0
+
+      # 运行时日志级别（DEBUG, INFO, WARNING, ERROR，默认 INFO）
+      - MCP_REDIS_LOG_LEVEL=INFO
+
+      # 全局只读安全守卫（默认强只读 true，设为 false 开启受控写操作）
+      - MCP_REDIS_READ_ONLY=true
+
+      # 是否开启分片集群模式（若 URL 未使用 redis-cluster:// 协议头，可设为 true 强制激活）
+      - MCP_REDIS_CLUSTER=false
+
+      # 传输协议（默认与 command 保持一致为 sse）
+      - MCP_REDIS_TRANSPORT=sse
+      - MCP_REDIS_SERVER_HOST=0.0.0.0
+      - MCP_REDIS_SERVER_PORT=8000
+    extra_hosts:
+      # 支持在 Linux 容器环境下通过 host.docker.internal 访问宿主机服务
+      - "host.docker.internal:host-gateway"
