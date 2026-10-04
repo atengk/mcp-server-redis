@@ -11,7 +11,7 @@
 _避免使用_: 数据源 (Data Source)、DB 配置 (DB Config)、实例定义 (Instance Spec)
 
 **连接注册中心 (Connection Registry)**:
-自适应双模连接管理核心，支持从单个 `REDIS_URL` 环境变量/CLI 参数自动构造默认连接，亦支持从 `--config` 配置文件（YAML / JSON）批量加载多连接实例并维护其连接池生命周期。  
+自适应双模连接管理核心，支持从单个 `MCP_REDIS_URL` 环境变量/CLI 参数自动构造默认连接，亦支持从 `--config` 配置文件（YAML / JSON）批量加载多连接实例并维护其连接池生命周期。  
 _避免使用_: 连接池管理器 (Pool Manager)、引擎工厂 (Engine Factory)
 
 **连接配置文件 (Connection Config)**:
@@ -61,3 +61,19 @@ _避免使用_: 动态反序列化 (Dynamic Deserializer)、对象映射器 (Obj
 **安全序列化器 (Safe Serializer)**:
 将 Redis 驱动返回的二进制 `bytes`、时间戳及结构体安全转码为标准 JSON 对象的处理层。优先进行 UTF-8 文本解码与 JSON 探测，遇二进制数据自动转为 Base64 编码并标明 `is_binary: True`，遇超长内容自动执行长度截断并标明 `truncated: True` 与原始字节长度。  
 _避免使用_: 数据格式化工具 (Data Formatter)、JSON 转换器 (JSON Dumper)
+
+**分发包名 (Distribution Package Name)**:
+发布至 PyPI 官方制品库的标准包名 `atengk-mcp-server-redis`，与内部模块路径 `mcp_server_redis` 形成清晰解耦，规避公共生态命名冲突。  
+_避免使用_: 注册前缀 (Registry Prefix)、项目全称 (Project Fullname)
+
+**双 CLI 别名 (Dual CLI Aliases)**:
+同时挂载在 `[project.scripts]` 下的 `atengk-mcp-server-redis`（对齐 `uvx` 默认查找契约）与 `mcp-server-redis`（支持本地快速调用），两者均指向同一协议启动入口 `mcp_server_redis:main`。  
+_避免使用_: 快捷方式 (Shortcuts)、命令行冗余 (Command Redundancy)
+
+**分级配置决议器 (Configuration Hierarchy Resolver)**:
+按“CLI 显式参数 > 系统/用户级环境变量 > 离散连接参数 > 本地 .env 文件 > 默认保底值”对连接串、配置文件路径与写权限开关进行优先级裁决的配置核心。  
+_避免使用_: 参数读取器 (Param Reader)、环境覆盖器 (Env Overrider)
+
+**离散参数组装器 (Discrete Parameters Synthesizer)**:
+将 `MCP_REDIS_HOST`、`MCP_REDIS_PORT`、`MCP_REDIS_PASSWORD`、`MCP_REDIS_DB` 等零散字段安全拼装为标准 Redis URL，并自动对密码中的特殊字符执行 Percent-Encoding 编码的防御单元。  
+_避免使用_: URL 拼接函数 (URL Concatenator)、连接串生成器 (URL Generator)

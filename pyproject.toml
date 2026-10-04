@@ -1,6 +1,6 @@
 [project]
-name = "mcp-server-redis"
-version = "0.1.0"
+name = "atengk-mcp-server-redis"
+version = "1.0.0"
 description = "基于 Python 与 FastMCP 构建的高性能 Redis 模型上下文协议（MCP）服务。专为大语言模型提供安全可控的键值探查、数据结构读写、慢查询分析与运维诊断能力。"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -10,7 +10,7 @@ authors = [
 ]
 keywords = ["mcp", "model-context-protocol", "redis", "llm", "database", "fastmcp"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -36,11 +36,15 @@ dev = [
 ]
 
 [project.scripts]
+atengk-mcp-server-redis = "mcp_server_redis:main"
 mcp-server-redis = "mcp_server_redis:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_server_redis"]
 
 [tool.ruff]
 line-length = 100
