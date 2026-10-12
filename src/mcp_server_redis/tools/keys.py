@@ -1,7 +1,7 @@
 """
 键空间检索与单键多维诊断工具。
 
-提供聚合键扫描器、单键综合元数据检视与轻量级 TTL 存活状态查询。
+提供聚合键扫描器与单键综合元数据检视能力。
 
 @author Ateng
 @since 2026-10-04
@@ -233,57 +233,6 @@ async def redis_key_inspect(
     }
 
 
-async def redis_key_ttl(
-    registry: ConnectionRegistry,
-    key: str,
-    connection: str | None = None,
-    db: int | None = None,
-) -> dict[str, Any]:
-    """极轻量独立存活时间查询工具，避免计算内存等高开销。
-
-    @param registry 连接注册中心实例
-    @param key 待查询的目标键名
-    @param connection 目标连接别名（可选）
-    @param db 目标数据库编号（可选）
-    @return 存活时间秒数、毫秒数与过期状态字典
-    """
-    if not key:
-        return {
-            "key": "",
-            "ttl": -2,
-            "pttl": -2,
-            "status": "not_found",
-            "has_expiry": False,
-            "exists": False,
-        }
-
-    client = registry.get_client(alias=connection, db=db)
-    ttl = await client.ttl(key)
-    pttl = await client.pttl(key)
-
-    if ttl == -2:
-        status = "not_found"
-        has_expiry = False
-        exists = False
-    elif ttl == -1:
-        status = "no_expiry"
-        has_expiry = False
-        exists = True
-    else:
-        status = "has_expiry"
-        has_expiry = True
-        exists = True
-
-    return {
-        "key": key,
-        "ttl": ttl,
-        "pttl": pttl,
-        "status": status,
-        "has_expiry": has_expiry,
-        "exists": exists,
-    }
-
-
 def register_key_tools(server: Any, registry: ConnectionRegistry) -> None:
     """将键检索与诊断相关工具挂载注册至 MCP 服务端。
 
@@ -317,12 +266,3 @@ def register_key_tools(server: Any, registry: ConnectionRegistry) -> None:
     ) -> dict[str, Any]:
         """单键多维诊断工具：聚合获取类型、TTL、内存占用与编码结构。"""
         return await redis_key_inspect(registry, key=key, connection=connection, db=db)
-
-    @server.tool(name="redis_key_ttl")  # type: ignore[untyped-decorator]
-    async def _tool_key_ttl(
-        key: str,
-        connection: str | None = None,
-        db: int | None = None,
-    ) -> dict[str, Any]:
-        """低延迟快速检测键的存活剩余时间与过期状态，免除内存计算开销。"""
-        return await redis_key_ttl(registry, key=key, connection=connection, db=db)

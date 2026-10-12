@@ -13,7 +13,6 @@ import pytest
 from mcp_server_redis.core.connection import ConnectionProfile, ConnectionRegistry
 from mcp_server_redis.tools.keys import (
     redis_key_inspect,
-    redis_key_ttl,
     redis_scan_keys,
     register_key_tools,
 )
@@ -219,45 +218,6 @@ async def test_redis_key_inspect_nonexistent_key(
 
 
 @pytest.mark.asyncio
-async def test_redis_key_ttl_scenarios(
-    sample_registry: ConnectionRegistry,
-) -> None:
-    """验证独立极轻量 TTL 工具对不同过期状态的解析。"""
-    mock_client = AsyncMock()
-
-    # 1. 具有过期时间
-    mock_client.ttl = AsyncMock(return_value=60)
-    mock_client.pttl = AsyncMock(return_value=60000)
-    with patch.object(sample_registry, "get_client", return_value=mock_client):
-        res_exp = await redis_key_ttl(sample_registry, key="session:1")
-        assert res_exp["ttl"] == 60
-        assert res_exp["pttl"] == 60000
-        assert res_exp["status"] == "has_expiry"
-        assert res_exp["has_expiry"] is True
-        assert res_exp["exists"] is True
-
-    # 2. 永久无过期
-    mock_client.ttl = AsyncMock(return_value=-1)
-    mock_client.pttl = AsyncMock(return_value=-1)
-    with patch.object(sample_registry, "get_client", return_value=mock_client):
-        res_persist = await redis_key_ttl(sample_registry, key="config:app")
-        assert res_persist["ttl"] == -1
-        assert res_persist["status"] == "no_expiry"
-        assert res_persist["has_expiry"] is False
-        assert res_persist["exists"] is True
-
-    # 3. 键不存在
-    mock_client.ttl = AsyncMock(return_value=-2)
-    mock_client.pttl = AsyncMock(return_value=-2)
-    with patch.object(sample_registry, "get_client", return_value=mock_client):
-        res_none = await redis_key_ttl(sample_registry, key="not_exist")
-        assert res_none["ttl"] == -2
-        assert res_none["status"] == "not_found"
-        assert res_none["has_expiry"] is False
-        assert res_none["exists"] is False
-
-
-@pytest.mark.asyncio
 async def test_register_key_tools_with_server(
     sample_registry: ConnectionRegistry,
 ) -> None:
@@ -269,9 +229,8 @@ async def test_register_key_tools_with_server(
 
     tools = await server.list_tools()
     tool_names = [t.name for t in tools]
-    assert "redis_scan_keys" in tool_names
-    assert "redis_key_inspect" in tool_names
-    assert "redis_key_ttl" in tool_names
+    assert set(tool_names) == {"redis_scan_keys", "redis_key_inspect"}
+    assert len(tool_names) == 2
 
 
 @pytest.mark.asyncio

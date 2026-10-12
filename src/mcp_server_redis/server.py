@@ -1,7 +1,7 @@
 """
 FastMCP 服务主装配与 CLI 命令行协议入口。
 
-负责加载连接注册中心、装配安全守卫、挂载全部 18 个 MCP 工具并管理服务生命周期。
+负责加载连接注册中心、装配安全守卫、挂载核心 4 个 MCP 工具并管理服务生命周期。
 
 @author Ateng
 @since 2026-10-04
@@ -20,20 +20,14 @@ from mcp.server import MCPServer
 FastMCP = MCPServer
 
 # 服务端版本号常量
-SERVER_VERSION: Final[str] = "1.0.4"
+SERVER_VERSION: Final[str] = "2.0.0"
 
 from mcp_server_redis.core.connection import ConnectionRegistry
 from mcp_server_redis.core.env import ServerConfig, resolve_server_configuration
 from mcp_server_redis.core.guard import SecurityGuard
-from mcp_server_redis.tools.admin import register_admin_tools
-from mcp_server_redis.tools.hashes import register_hash_tools
+from mcp_server_redis.tools.command import register_command_tools
 from mcp_server_redis.tools.instances import register_instance_tools
 from mcp_server_redis.tools.keys import register_key_tools
-from mcp_server_redis.tools.lists import register_list_tools
-from mcp_server_redis.tools.sets import register_set_tools
-from mcp_server_redis.tools.streams import register_stream_tools
-from mcp_server_redis.tools.strings import register_string_tools
-from mcp_server_redis.tools.zsets import register_zset_tools
 
 logger = logging.getLogger("mcp_server_redis")
 
@@ -128,7 +122,7 @@ def create_app(
     cluster: bool | None = None,
     server_config: ServerConfig | None = None,
 ) -> FastMCP:
-    """工厂函数：根据配置初始化连接注册中心、安全守卫并装配全部 18 个 MCP 工具。
+    """工厂函数：根据配置初始化连接注册中心、安全守卫并装配核心 4 个 MCP 工具。
 
     支持多层级配置决议：CLI 显式参数 > 环境变量整串/离散参数 > 本地 .env > 系统保底默认。
 
@@ -178,16 +172,10 @@ def create_app(
         lifespan=app_lifespan,
     )
 
-    # 4. 装配挂载全部 18 个 MCP 工具
+    # 4. 装配挂载核心 4 个 MCP 工具 (v2.0 混合命令网关模式)
+    register_command_tools(app, registry, guard=guard)
     register_instance_tools(app, registry)
     register_key_tools(app, registry)
-    register_string_tools(app, registry, guard=guard)
-    register_hash_tools(app, registry)
-    register_list_tools(app, registry)
-    register_set_tools(app, registry)
-    register_zset_tools(app, registry)
-    register_stream_tools(app, registry)
-    register_admin_tools(app, registry)
 
     return app
 

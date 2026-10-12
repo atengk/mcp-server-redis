@@ -22,48 +22,30 @@ from mcp_server_redis.server import (
 
 
 @pytest.mark.asyncio
-async def test_create_app_mounts_all_18_tools() -> None:
-    """验证 create_app 成功初始化并装配全部 18 个生产级 MCP 工具。"""
+async def test_create_app_mounts_all_4_tools() -> None:
+    """验证 create_app 成功初始化并挂载收敛后的核心 4 个生产级 MCP 工具。"""
     app = create_app(url="redis://localhost:6379/0", allow_write=False)
 
     # 检视已注册工具列表
     tools = await app.list_tools()
     tool_names = {t.name for t in tools}
 
-    expected_18_tools = {
-        # 1. 实例探查与连接 (2)
+    expected_4_tools = {
+        "redis_command",
         "redis_list_connections",
-        "redis_ping",
-        # 2. 键空间检索与诊断 (3)
         "redis_scan_keys",
         "redis_key_inspect",
-        "redis_key_ttl",
-        # 3. 字符串读写与删除门禁 (4)
-        "redis_get_string",
-        "redis_set_string",
-        "redis_expire_key",
-        "redis_delete_keys",
-        # 4. 五大复杂集合与流 (5)
-        "redis_hash_get",
-        "redis_list_range",
-        "redis_set_members",
-        "redis_zset_range",
-        "redis_stream_read",
-        # 5. 运维性能诊断 (4)
-        "redis_info",
-        "redis_dbsize",
-        "redis_get_slowlog",
-        "redis_client_list",
     }
 
-    assert expected_18_tools.issubset(tool_names)
-    assert len(tool_names) == 18
+    assert tool_names == expected_4_tools
+    assert len(tool_names) == 4
 
 
 def test_create_app_sets_server_version() -> None:
-    """验证 create_app 正确配置服务协议版本号。"""
+    """验证 create_app 正确配置服务协议版本号为 2.0.0。"""
     app = create_app(url="redis://localhost:6379/0")
     assert app.version == SERVER_VERSION
+    assert SERVER_VERSION == "2.0.0"
 
 
 @pytest.mark.asyncio
@@ -79,9 +61,9 @@ async def test_end_to_end_mcp_call_tool() -> None:
     assert res.structured_content["total"] == 1
     assert res.structured_content["default"] == "default"
 
-    # 2. 验证只读模式下调用写工具受安全门禁拦截
+    # 2. 验证只读模式下调用写命令受安全门禁拦截
     with pytest.raises(UnexpectedToolError):
-        await app.call_tool("redis_set_string", {"key": "test_key", "value": "val"})
+        await app.call_tool("redis_command", {"command": "SET test_key val"})
 
 
 def test_build_argument_parser_defaults() -> None:

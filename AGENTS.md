@@ -16,11 +16,10 @@
    - `serializer.py`：数据安全序列化器（`SafeSerializer`），实现自适应 UTF-8 解码、二进制 Base64 转码与超长内容截断；
    - `audit.py`：审计日志与慢查询诊断采集。
 3. **工具实现层 (`tools/`)**：
-   - 统一采用 `redis_` 前缀，按领域职责拆分为独立伴生模块：
-     - `instances.py`：连接列表、健康探活、系统信息与键总量；
-     - `keys.py`：聚合键扫描（`redis_scan_keys`）、单键多维诊断（`redis_key_inspect`）、TTL 查询（`redis_key_ttl`）；
-     - `strings.py`、`hashes.py`、`lists.py`、`sets.py`、`zsets.py`、`streams.py`：数据结构读写与切片防御；
-     - `admin.py`：慢日志（`redis_get_slowlog`）与客户端监控（`redis_client_list`）。
+   - 统一采用 `redis_` 前缀，收敛为 4 个核心工具：
+     - `command.py`：原生 Redis 命令执行网关（`redis_command`），集成命令分类裁决、双重写门禁与信封包装；
+     - `instances.py`：多连接配置与实例检视（`redis_list_connections`）；
+     - `keys.py`：聚合键扫描（`redis_scan_keys`）、单键多维诊断（`redis_key_inspect`）。
 
 ### 核心依赖栈
 - Python `>=3.10`
@@ -35,14 +34,14 @@
 ## 2. 工程质量与安全底线
 
 1. **工业级只读防护与双重写门禁 (Dual Write Gate)**：
-   - 默认全局强只读，写操作（SET、DEL、EXPIRE 等）必须受启动参数 `--allow-write` 显式管控且目标连接配置 `readonly` 必须为 `false`；
+   - 默认全局强只读，写操作（SET、DEL、HSET 等）必须受启动参数 `--allow-write` 显式管控且目标连接配置 `readonly` 必须为 `false`；
    - 底层代码永久物理阻断破坏性指令：`FLUSHALL`、`FLUSHDB`、`SHUTDOWN`、`CONFIG`、`DEBUG` 与阻塞式 `KEYS *`。
 2. **非阻塞安全聚合扫描**：
    - 键名扫描由内部聚合扫描器循环迭代底层 `SCAN` 游标，对外提供单次有限返回（默认最多 50 条，硬上限 200 条）。
 3. **大集合切片与防 OOM 防御**：
-   - 所有集合类数据结构（Hash/List/Set/ZSet/Stream）读取强制要求分页与数量截断，禁止全量无截断拉取。
+   - 所有命令返回的大型集合类数据（Hash/List/Set/ZSet）强制实施元素数量截断（默认上限 100 项），并在信封中标记截断元数据。
 4. **高危删除二次确认门禁**：
-   - 删除操作（`redis_delete_keys`）强制携带 `confirm: bool = False`，未确认时仅返回预估影响，传 `confirm=True` 方可执行物理删除。
+   - 删除操作（`DEL`/`UNLINK`）在 `redis_command` 中强制携带 `confirm: bool = False`，未确认时仅返回待确认结构体，传 `confirm=True` 方可执行物理删除。
 5. **无状态动态切库**：
    - 每个工具统一支持 `connection: str = None` 与 `db: int = None` 参数，严禁在底层连接上执行有状态的 `SELECT <db>` 命令。
 6. **自适应序列化与敏感信息脱敏**：
