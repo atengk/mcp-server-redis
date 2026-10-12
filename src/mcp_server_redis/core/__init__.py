@@ -23,13 +23,23 @@ from mcp_server_redis.core.env import (
     resolve_transport_from_env,
 )
 from mcp_server_redis.core.guard import SecurityGuard
-from mcp_server_redis.core.serializer import SafeSerializer
+from mcp_server_redis.core.serializer import (
+    DEFAULT_MAX_COLLECTION_ITEMS,
+    SafeSerializer,
+    SerializedCollection,
+    SerializedResult,
+    SerializedValue,
+)
 
 __all__ = [
+    "DEFAULT_MAX_COLLECTION_ITEMS",
     "ConnectionProfile",
     "ConnectionRegistry",
     "SafeSerializer",
     "SecurityGuard",
+    "SerializedCollection",
+    "SerializedResult",
+    "SerializedValue",
     "ServerConfig",
     "load_dotenv_if_exists",
     "parse_bool_env",
