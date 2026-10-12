@@ -30,6 +30,14 @@ _避免使用_: 单一授权 (Single Auth)、强制覆盖 (Force Override)
 在 Redis 命令调度前执行拦截的安全防线。负责双重写门禁判决，并物理阻断破坏性指令。  
 _避免使用_: 过滤器 (Filter)、安全拦截器 (Interceptor)、检查器 (Checker)
 
+**命令网关 (Command Gateway)**:
+接收客户端原生 Redis 命令字符串，负责安全分词、前置门禁裁决并在目标实例上无状态执行的核心协议入口 (`redis_command`)。  
+_避免使用_: 命令代理 (Command Proxy)、命令管道 (Command Pipeline)
+
+**命令分类裁决器 (Command Classifier)**:
+依据只读白名单、高危破坏性黑名单及变更操作集合，对原生 Redis 命令动词进行动态安全级别判决的分析核心。  
+_避免使用_: 指令解析器 (Instruction Parser)、命令过滤器 (Command Filter)
+
 **破坏性指令 (Destructive Commands)**:
 在任何模式下均被底层代码永久物理切断的 Redis 原生高危指令集合（如 `FLUSHALL`、`FLUSHDB`、`KEYS *`、`SHUTDOWN`、`CONFIG`、`DEBUG` 等）。  
 _避免使用_: 黑名单命令 (Blacklist Commands)、高危操作 (Dangerous Operations)
