@@ -43,7 +43,7 @@ _避免使用_: 指令解析器 (Instruction Parser)、命令过滤器 (Command 
 _避免使用_: 黑名单命令 (Blacklist Commands)、高危操作 (Dangerous Operations)
 
 **二次确认门禁 (Confirmation Guard)**:
-针对高危删除操作（`redis_delete_keys`）施加的交互式安全门禁。必须显式传入 `confirm=True` 方可执行物理删除；未确认时仅返回目标影响预估及待确认提示。  
+针对高危删除操作（`DEL`/`UNLINK`）施加的交互式安全门禁。必须显式传入 `confirm=True` 方可执行物理删除；未确认时仅返回目标待删除键列表及待确认提示。  
 _避免使用_: 交互式弹窗 (Interactive Prompt)、删除检查器 (Delete Verifier)
 
 **聚合键扫描器 (Aggregated Key Scanner)**:

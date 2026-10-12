@@ -11,7 +11,7 @@ assignees: ""
 
 ### 重现步骤
 1. 配置连接 / 启动命令 '...'
-2. 调用工具（如 redis_get_string / redis_delete_keys 等）'...'
+2. 调用工具（如 redis_command / redis_scan_keys 等）'...'
 3. 传入参数 '...'
 4. 观察到报错 '...'
 

@@ -94,8 +94,8 @@
 
 1. **工业级只读防护与双重写门禁**：写操作必须显式受 `--allow-write` 与连接配置 `readonly=false` 双重管控；底层硬编码物理切断破坏性指令（`FLUSHALL`、`FLUSHDB`、`SHUTDOWN`、`CONFIG`、`DEBUG` 与阻塞式 `KEYS *`）；
 2. **非阻塞安全扫描**：键扫描由内部聚合迭代底层 `SCAN` 游标，对外提供单次有限返回（默认最多 50 条，硬上限 200 条）；
-3. **防 OOM 集合切片**：所有集合结构（Hash/List/Set/ZSet/Stream）读取强制要求分页与数量截断；
-4. **高危删除二次确认**：删除操作（`redis_delete_keys`）强制携带 `confirm: bool = False`，未确认时仅返回受影响预估；
+3. **防 OOM 集合切片**：大集合类数据（Hash/List/Set/ZSet）命令返回强制实施条数截断保护（默认上限 100 项）；
+4. **高危删除二次确认**：删除操作（`DEL`/`UNLINK`）在 `redis_command` 中强制携带 `confirm: bool = False`，未确认时仅返回待确认结构体；
 5. **协议管道纯净性**：所有日志流向 `sys.stderr`，严禁在控制台通过裸 `print` 向 `sys.stdout` 输出任何非 JSON-RPC 字符；
 6. **代码注释三要素**：新建源码文件必须包含文件/类级标准注释，涵盖职责说明、`@author Ateng` 与当天真实系统日期 `@since YYYY-MM-DD`。
 
