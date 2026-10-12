@@ -154,6 +154,75 @@ redis_command(command="GET app_config", connection="staging", db=1)
 
 ---
 
+## 🔍 核心探查辅助工具调用与返回示例
+
+### 1. 检视全部连接实例 (`redis_list_connections`)
+```python
+redis_list_connections()
+```
+返回结果（敏感凭据自动脱敏掩码）：
+```json
+{
+  "default": "local",
+  "total": 2,
+  "connections": [
+    {
+      "alias": "local",
+      "url": "redis://:***@localhost:6379/0",
+      "db": 0,
+      "readonly": false,
+      "description": "本地开发实例",
+      "is_default": true
+    },
+    {
+      "alias": "prod",
+      "url": "redis://:***@prod.redis.internal:6379/0",
+      "db": 0,
+      "readonly": true,
+      "description": "生产只读从库",
+      "is_default": false
+    }
+  ]
+}
+```
+
+### 2. 聚合键扫描器 (`redis_scan_keys`)
+```python
+# 检索前缀匹配键（支持类型过滤，内部自动遍历游标防死循环）
+redis_scan_keys(pattern="user:*", limit=10, type="hash")
+```
+返回结果：
+```json
+{
+  "pattern": "user:*",
+  "type": "hash",
+  "count": 2,
+  "keys": ["user:profile:1001", "user:profile:1002"],
+  "cursor": 0,
+  "is_truncated": false
+}
+```
+
+### 3. 单键多维综合诊断 (`redis_key_inspect`)
+```python
+# 一站式单键多维诊断（类型、生命周期、内存占用与编码结构）
+redis_key_inspect(key="user:profile:1001")
+```
+返回结果：
+```json
+{
+  "key": "user:profile:1001",
+  "exists": true,
+  "type": "hash",
+  "ttl": 3600,
+  "pttl": 3600000,
+  "memory_usage": 184,
+  "encoding": "listpack"
+}
+```
+
+---
+
 ## 📦 安装与快速运行
 
 ### 方式 1：使用 `uvx` 免安装直接运行（强烈推荐）
@@ -201,6 +270,15 @@ docker run -i --rm -e MCP_REDIS_URL="redis://host.docker.internal:6379/0" ghcr.i
 
 # 常驻后台 HTTP SSE 服务端（暴露 8000 端口）
 docker-compose up -d
+```
+
+### 方式 5：使用官方 MCP Inspector 进行本地可视化调试
+
+无需配置大模型 GUI 客户端，直接借助 Anthropic / Model Context Protocol 官方调试工具在浏览器中可视化交互调试全部 4 个工具：
+
+```bash
+# 启动本地 Inspector 探针（自动打开浏览器调试界面）
+npx @modelcontextprotocol/inspector uvx atengk-mcp-server-redis --url "redis://localhost:6379/0"
 ```
 
 ---
@@ -543,6 +621,34 @@ uvx atengk-mcp-server-redis --config ./connections.yaml --allow-write
 3. **删除二次确认门禁**：`DEL`/`UNLINK` 命令在未传 `confirm=True` 时拦截物理执行，向调用方输出待确认影响清单；
 4. **防 OOM 自动集合切片**：大集合结果自动截断至 100 项，并在元数据中断言截断状态；
 5. **敏感凭据自动脱敏**：连接日志与配置查询中密码一律掩码输出。
+
+---
+
+## 🚨 常见拦截与错误排查指南 (Troubleshooting)
+
+| 异常现象 / 响应特征 | 触发原因 | 推荐解决排查方式 |
+| :--- | :--- | :--- |
+| **`ReadOnlyModeError`**<br>`服务处于只读保护模式...` | 在未传 `--allow-write` 的全局只读模式下尝试执行写操作（如 `SET`、`HSET`、`LPUSH` 等）。 | 若需写权限，在服务启动命令中显式追加 `--allow-write`（或环境变量 `MCP_REDIS_ALLOW_WRITE=true`）。 |
+| **`ReadOnlyConnectionError`**<br>`目标连接配置为只读...` | 虽然开启了全局 `--allow-write`，但在多实例配置中目标连接档案被显式标明 `readonly: true`。 | 检查 `connections.yaml`，确认是否需要在该特定环境开启写操作；若为生产保护从库，严禁修改。 |
+| **`confirmation_required`**<br>`status: confirmation_required` | 调用 `DEL` 或 `UNLINK` 命令时未显式传入 `confirm=True`。 | 属于正常安全二次确认拦截。大模型/调用方需在核对 `keys` 列表后，再次调用 `redis_command(..., confirm=True)`。 |
+| **`DestructiveCommandError`**<br>`物理切断破坏性高危指令...` | 尝试执行破坏性删库或阻塞指令（`FLUSHALL`、`FLUSHDB`、`KEYS *`、`SHUTDOWN`、`CONFIG` 等）。 | 底层永久物理拦截，无法通过任何参数绕过。请改用键前缀安全扫描 `redis_scan_keys` 或单键操作。 |
+| **`CrossSlotError`**<br>`Redis Cluster 跨槽执行拦截...` | 在分片集群中执行跨越不同哈希槽的多键命令（如 `MGET {user1}:a {user2}:b`）。 | 遵循语义化引导，将多键指令拆分为针对单一键或相同哈希标签（`{hash_tag}`）的多次独立单键命令。 |
+| **`ConnectionError`**<br>`Error connecting to host...` | Redis 端口未开放、网络不可达、防火墙拦截或连接超时。 | 使用 `Test-NetConnection` 或 `nc -zv` 验证网络链路，检查密码是否包含特殊字符（推荐使用离散环境变量配置）。 |
+
+---
+
+## ⚠️ 边界约束与不支持操作 (Limitations & Out-of-Scope)
+
+作为专为大语言模型打造的单次请求/响应 MCP 协议网关，以下 Redis 场景超出了本工具的设计范畴：
+
+1. **阻塞式长订阅（Pub/Sub Streaming）**：
+   - 不支持 `SUBSCRIBE` / `PSUBSCRIBE`。MCP 工具基于非流式单次同步响应范式，长连接事件推送应由专用的 MQ 消费者或微服务长连接处理。
+2. **跨请求有状态事务（Multi-Request Transactions）**：
+   - 不支持跨请求的 `MULTI` / `EXEC` / `WATCH` 会话。每次 `redis_command` 均为独立的无状态操作，底层连接池在并发复用时不保持会话级事务状态。
+3. **永久挂起阻塞式命令（Zero-Timeout Blocking Commands）**：
+   - 执行 `BLPOP`、`BRPOP`、`BZPOPMIN` 等阻塞式读取时，**严禁将超时参数设为 `0`**（无限阻塞等待），否则会导致服务工作进程被永久挂起。建议传入短超时参数（如 `BLPOP mylist 1`）。
+4. **服务运行态配置动态篡改**：
+   - `CONFIG SET`、`CONFIG REWRITE` 属于底层永久硬阻断范畴，严禁在大模型会话中篡改 Redis 服务运行配置。
 
 ---
 
