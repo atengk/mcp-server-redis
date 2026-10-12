@@ -383,9 +383,7 @@ async def test_fastmcp_call_tool_redis_command_protocol_seams(
 
         # 2. 协议级写命令调度 (SET)
         mock_client.execute_command = AsyncMock(return_value="OK")
-        res_set = await app.call_tool(
-            "redis_command", {"command": 'SET message "welcome to mcp"'}
-        )
+        res_set = await app.call_tool("redis_command", {"command": 'SET message "welcome to mcp"'})
         assert isinstance(res_set, CallToolResult)
         assert not res_set.is_error
         assert res_set.structured_content is not None

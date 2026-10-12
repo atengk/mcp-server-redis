@@ -274,8 +274,12 @@ def test_command_classifier_common_write_commands() -> None:
     """验证常见写操作在只读模式下被拦截，在写授权模式下被放行。"""
     guard_readonly = SecurityGuard(allow_write=False)
     guard_write = SecurityGuard(allow_write=True)
-    readonly_profile = ConnectionProfile(alias="staging", url="redis://staging:6379/0", readonly=True)
-    write_profile = ConnectionProfile(alias="prod_master", url="redis://prod:6379/0", readonly=False)
+    readonly_profile = ConnectionProfile(
+        alias="staging", url="redis://staging:6379/0", readonly=True
+    )
+    write_profile = ConnectionProfile(
+        alias="prod_master", url="redis://prod:6379/0", readonly=False
+    )
 
     write_commands = [
         "SET key val",

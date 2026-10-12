@@ -91,11 +91,11 @@
    - 统一输出结构定义：
      ```python
      {
-         "command": str,          # 原始执行命令
-         "result": Any,           # 序列化后的安全结果
-         "data_type": str,        # 结果推导类型（string, integer, list, dict, none 等）
-         "is_truncated": bool,    # 是否发生截断
-         "total_count": int | None # 若发生集合截断，标明原始条数
+         "command": str,  # 原始执行命令
+         "result": Any,  # 序列化后的安全结果
+         "data_type": str,  # 结果推导类型（string, integer, list, dict, none 等）
+         "is_truncated": bool,  # 是否发生截断
+         "total_count": int | None,  # 若发生集合截断，标明原始条数
      }
      ```
 
