@@ -30,5 +30,7 @@
 | [ADR-0009](./0009-oss-engineering-template-integration.md) | 开源工程化模版集成与现代自动化流水线架构 | 已采纳 | 2026-10-04 |
 | [ADR-0010](./0010-hybrid-command-gateway-architecture.md) | 混合命令网关架构与协议工具精简设计 | 已采纳 | 2026-10-12 |
 | [ADR-0011](./0011-canonical-naming-and-full-mcp-protocol.md) | 规范动宾工具契约、无别名纯净暴露与全 MCP 协议矩阵 | 已采纳 | 2026-10-14 |
+| [ADR-0012](./0012-resilience-pipeline-and-safe-blocking.md) | 游标续翻分页、阻塞超时收敛、空闲心跳与管道批处理网关 | 已采纳 | 2026-10-14 |
+
 
 

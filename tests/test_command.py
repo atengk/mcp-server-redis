@@ -438,3 +438,220 @@ async def test_redis_execute_command_info_parsing(
         assert res_mem["data_type"] == "dict"
         assert res_mem["result"]["used_memory"] == 2097152
         assert res_mem["result"]["used_memory_human"] == "2.00M"
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_pipeline_success(
+    sample_registry: ConnectionRegistry,
+    write_guard: SecurityGuard,
+) -> None:
+    """验证 commands 列表管道批处理正常下发与聚合信封组装。"""
+    mock_client = AsyncMock()
+    mock_pipe = AsyncMock()
+    mock_pipe.execute_command = MagicMock()
+    mock_pipe.execute = AsyncMock(return_value=["OK", b"value1", 1])
+    mock_pipe.__aenter__ = AsyncMock(return_value=mock_pipe)
+    mock_pipe.__aexit__ = AsyncMock(return_value=None)
+    mock_client.pipeline = MagicMock(return_value=mock_pipe)
+
+    commands = ['SET k1 "value1"', "GET k1", "EXISTS k1"]
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_execute_command(
+            registry=sample_registry,
+            commands=commands,
+            guard=write_guard,
+        )
+
+        assert res["command"] == "PIPELINE"
+        assert res["total_commands"] == 3
+        assert res["status"] == "success"
+        assert len(res["results"]) == 3
+        assert res["results"][0]["result"] == "OK"
+        assert res["results"][1]["result"] == "value1"
+        assert res["results"][2]["result"] == 1
+        assert mock_pipe.execute_command.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_pipeline_fail_close_destructive(
+    sample_registry: ConnectionRegistry,
+    write_guard: SecurityGuard,
+) -> None:
+    """验证管道批处理前置 Fail-Close：包含高危破坏性指令时整批直接阻断。"""
+    commands = ["GET k1", "FLUSHALL", "GET k2"]
+
+    with pytest.raises(DestructiveCommandError, match="物理拦截破坏性指令"):
+        await redis_execute_command(
+            registry=sample_registry,
+            commands=commands,
+            guard=write_guard,
+        )
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_pipeline_fail_close_readonly(
+    sample_registry: ConnectionRegistry,
+    readonly_guard: SecurityGuard,
+) -> None:
+    """验证管道批处理前置 Fail-Close：只读模式下包含写命令整批拒绝。"""
+    commands = ["GET k1", 'SET k2 "v2"']
+
+    with pytest.raises(ReadOnlyModeError, match="服务处于只读保护模式"):
+        await redis_execute_command(
+            registry=sample_registry,
+            commands=commands,
+            guard=readonly_guard,
+        )
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_pipeline_confirmation_required(
+    sample_registry: ConnectionRegistry,
+    write_guard: SecurityGuard,
+) -> None:
+    """验证管道批处理合并提取未确认删除键并返回二次确认信封。"""
+    commands = ["GET k1", "DEL k2 k3", "UNLINK k4"]
+
+    res = await redis_execute_command(
+        registry=sample_registry,
+        commands=commands,
+        guard=write_guard,
+        confirm=False,
+    )
+
+    assert res["status"] == "confirmation_required"
+    assert res["command"] == "PIPELINE"
+    assert res["keys"] == ["k2", "k3", "k4"]
+    assert res["target_count"] == 3
+    assert "confirm=True" in res["message"]
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_pipeline_with_confirm_true(
+    sample_registry: ConnectionRegistry,
+    write_guard: SecurityGuard,
+) -> None:
+    """验证在显式 confirm=True 时管道批处理放行高危删除操作。"""
+    mock_client = AsyncMock()
+    mock_pipe = AsyncMock()
+    mock_pipe.execute_command = MagicMock()
+    mock_pipe.execute = AsyncMock(return_value=["PONG", 2])
+    mock_pipe.__aenter__ = AsyncMock(return_value=mock_pipe)
+    mock_pipe.__aexit__ = AsyncMock(return_value=None)
+    mock_client.pipeline = MagicMock(return_value=mock_pipe)
+
+    commands = ["PING", "DEL k1 k2"]
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_execute_command(
+            registry=sample_registry,
+            commands=commands,
+            guard=write_guard,
+            confirm=True,
+        )
+
+        assert res["status"] == "success"
+        assert res["total_commands"] == 2
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_validation_errors(
+    sample_registry: ConnectionRegistry,
+    readonly_guard: SecurityGuard,
+) -> None:
+    """验证参数冲突、空批次、超限批次的参数校验抛错。"""
+    # 1. command 和 commands 二选一冲突
+    with pytest.raises(ValueError, match="不能同时传入"):
+        await redis_execute_command(
+            sample_registry,
+            command="PING",
+            commands=["PING"],
+            guard=readonly_guard,
+        )
+
+    # 2. 空 commands 列表
+    with pytest.raises(ValueError, match="批处理列表不能为空"):
+        await redis_execute_command(
+            sample_registry,
+            commands=[],
+            guard=readonly_guard,
+        )
+
+    # 3. 超过 20 条上限
+    with pytest.raises(ValueError, match="最多支持 20 条命令"):
+        await redis_execute_command(
+            sample_registry,
+            commands=["PING"] * 21,
+            guard=readonly_guard,
+        )
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_blocking_timeout_clamping(
+    sample_registry: ConnectionRegistry,
+    write_guard: SecurityGuard,
+) -> None:
+    """验证执行阻塞指令时超时主动改写并携带 message 说明。"""
+    mock_client = AsyncMock()
+    mock_client.execute_command = AsyncMock(return_value=None)
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        # 1. 单命令网关：0 秒超时收敛为 2 秒
+        res = await redis_execute_command(
+            registry=sample_registry,
+            command="BLPOP myqueue 0",
+            guard=write_guard,
+        )
+        assert "message" in res
+        assert "2 秒" in res["message"]
+        mock_client.execute_command.assert_called_once_with("BLPOP", "myqueue", "2")
+
+    # 2. 管道网关：聚合提示 message
+    mock_pipe = AsyncMock()
+    mock_pipe.execute_command = MagicMock()
+    mock_pipe.execute = AsyncMock(return_value=[None, "PONG"])
+    mock_pipe.__aenter__ = AsyncMock(return_value=mock_pipe)
+    mock_pipe.__aexit__ = AsyncMock(return_value=None)
+    mock_client.pipeline = MagicMock(return_value=mock_pipe)
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res_pipe = await redis_execute_command(
+            registry=sample_registry,
+            commands=["BLPOP myqueue 0", "PING"],
+            guard=write_guard,
+        )
+        assert "message" in res_pipe
+        assert "2 秒" in res_pipe["message"]
+        mock_pipe.execute_command.assert_any_call("BLPOP", "myqueue", "2")
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_pipeline_individual_error(
+    sample_registry: ConnectionRegistry,
+    write_guard: SecurityGuard,
+) -> None:
+    """验证管道内某条命令在 Redis 端报错时，信封标记 error 并保留错误明细。"""
+    mock_client = AsyncMock()
+    mock_pipe = AsyncMock()
+    mock_pipe.execute_command = MagicMock()
+    # 模拟第二条命令返回 ResponseError
+    mock_pipe.execute = AsyncMock(
+        return_value=["OK", ResponseError("WRONGTYPE Operation against a key")]
+    )
+    mock_pipe.__aenter__ = AsyncMock(return_value=mock_pipe)
+    mock_pipe.__aexit__ = AsyncMock(return_value=None)
+    mock_client.pipeline = MagicMock(return_value=mock_pipe)
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_execute_command(
+            registry=sample_registry,
+            commands=["SET k1 v1", "HGETALL k1"],
+            guard=write_guard,
+        )
+
+        assert res["status"] == "error"
+        assert res["results"][0]["status"] == "success" if "status" in res["results"][0] else True
+        assert res["results"][1]["status"] == "error"
+        assert res["results"][1]["error_type"] == "ResponseError"
+        assert "WRONGTYPE" in res["results"][1]["result"]

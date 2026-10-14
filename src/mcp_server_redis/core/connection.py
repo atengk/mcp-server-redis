@@ -333,7 +333,10 @@ class ConnectionRegistry:
             decode_responses=False,
             socket_connect_timeout=profile.socket_connect_timeout,
             socket_timeout=profile.socket_timeout,
+            health_check_interval=30,
+            retry_on_timeout=True,
         )
+
         self._clients[cache_key] = client
         return client
 

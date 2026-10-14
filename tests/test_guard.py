@@ -440,3 +440,41 @@ def test_command_classifier_edge_cases_and_input_types() -> None:
     assert verdict.category == CommandCategory.READ_ONLY
     assert verdict.command_name == "GET"
     assert verdict.raw_tokens == ["GET", "user:1001"]
+
+
+def test_blocking_commands_timeout_clamping() -> None:
+    """验证阻塞式读取指令超时主动收敛：0秒改写为2秒，>5秒截断为5秒。"""
+    # 1. 0 秒无限期等待改写为 2 秒
+    res_zero = CommandClassifier.classify("BLPOP myqueue 0")
+    assert res_zero.raw_tokens == ["BLPOP", "myqueue", "2"]
+    assert res_zero.clamped_message is not None
+    assert "2 秒" in res_zero.clamped_message
+
+    res_brpop = CommandClassifier.classify("BRPOP q1 q2 0.0")
+    assert res_brpop.raw_tokens == ["BRPOP", "q1", "q2", "2"]
+    assert res_brpop.clamped_message is not None
+
+    res_blmove = CommandClassifier.classify("BLMOVE src dst LEFT RIGHT 0")
+    assert res_blmove.raw_tokens == ["BLMOVE", "src", "dst", "LEFT", "RIGHT", "2"]
+    assert res_blmove.clamped_message is not None
+
+    # 2. 超时大于 5 秒收敛截断为 5 秒
+    res_long = CommandClassifier.classify("BZPOPMIN zset1 10")
+    assert res_long.raw_tokens == ["BZPOPMIN", "zset1", "5"]
+    assert res_long.clamped_message is not None
+    assert "5 秒" in res_long.clamped_message
+
+    # 3. 合法安全范围 (0, 5] 内超时保持原样不改写
+    res_safe = CommandClassifier.classify("BZPOPMAX zset1 3")
+    assert res_safe.raw_tokens == ["BZPOPMAX", "zset1", "3"]
+    assert res_safe.clamped_message is None
+
+    # 4. 非阻塞指令不受影响
+    res_get = CommandClassifier.classify("GET key 0")
+    assert res_get.raw_tokens == ["GET", "key", "0"]
+    assert res_get.clamped_message is None
+
+    # 5. 非数字超时语法容错放行（由 Redis 服务端处理语法错误）
+    res_invalid = CommandClassifier.classify("BLPOP key abc")
+    assert res_invalid.raw_tokens == ["BLPOP", "key", "abc"]
+    assert res_invalid.clamped_message is None

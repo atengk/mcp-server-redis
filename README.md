@@ -65,9 +65,9 @@
 
 | MCP 工具名称 | 核心参数契约 | 功能描述与安全门禁 |
 | :--- | :--- | :--- |
-| **`redis_execute_command`** | `(command: str, connection=None, db=None, confirm=False)` | **核心命令网关**：原生 Redis 命令执行通道。<br>• 80+ 只读白名单直接放行<br>• 写命令受双重写门禁管辖（`--allow-write`）<br>• `DEL`/`UNLINK` 强制要求 `confirm=True` 二次确认<br>• 永久物理阻断破坏性指令（`FLUSHALL`/`KEYS *` 等）<br>• `INFO` 命令自动智能结构化紧凑字典<br>• 超过 100 项大集合自动截断防 OOM |
+| **`redis_execute_command`** | `(command="", commands=None, connection=None, db=None, confirm=False)` | **核心命令网关**：原生 Redis 命令执行通道。<br>• 80+ 只读白名单直接放行<br>• 写命令受双重写门禁管辖（`--allow-write`）<br>• `DEL`/`UNLINK` 强制要求 `confirm=True` 二次确认<br>• 永久物理阻断破坏性指令（`FLUSHALL`/`KEYS *` 等）<br>• 支持 `commands=[...]` 管道批处理（上限 20 条，全批次 Fail-Close 强校验）<br>• 阻塞式读取命令（`BLPOP` 等）超时自动安全收敛（0 秒改写为 2 秒，最大 5 秒）防假死<br>• `INFO` 命令自动智能结构化紧凑字典<br>• 超过 100 项大集合自动截断防 OOM |
 | **`redis_list_connections`** | `()` | **连接实例检视**：查看所有已配置的 Redis 连接别名、脱敏 URL、数据库编号及默认连接标识。 |
-| **`redis_scan_keys`** | `(pattern="*", limit=50, type=None, connection=None, db=None, include_meta=False)` | **聚合键扫描器**：非阻塞循环迭代底层游标聚合检索匹配键名，默认最多 50 条，单次硬上限 200 条，杜绝游标死循环。支持 `include_meta=True` 单次往返并发附带类型与 TTL。 |
+| **`redis_scan_keys`** | `(pattern="*", limit=50, cursor=0, type=None, connection=None, db=None, include_meta=False)` | **聚合键扫描器**：非阻塞循环迭代底层游标聚合检索匹配键名，默认最多 50 条，单次硬上限 200 条，杜绝游标死循环。支持传入上一页 `cursor` 断点续翻，支持 `include_meta=True` 单次往返并发附带类型与 TTL。 |
 | **`redis_inspect_key`** | `(key: str, connection=None, db=None)` | **单键多维诊断**：聚合获取目标键的类型、TTL/PTTL、内存占用（`MEMORY USAGE`）与底层存储编码。 |
 
 
@@ -177,6 +177,48 @@ redis_execute_command(command="DBSIZE", db=3)
 redis_execute_command(command="GET app_config", connection="staging", db=1)
 ```
 
+### 6. 多命令管道批处理 (`commands=[...]`)
+通过 `commands` 传入多命令列表，在单一网络往返中通过底层 Redis Pipeline 批量下发（上限 20 条），大幅降低 LLM 多轮工具交互的推理延迟与网络开销。
+全批次实施 **Fail-Close 前置强校验**：若任一条命令命中破坏性阻断或未授权写门禁，整批直接拒绝执行；若包含 `DEL/UNLINK` 且未传 `confirm=True`，合并返回包含待删键汇总的二次确认信封。
+```python
+# 单次往返管道批处理执行多命令
+redis_execute_command(commands=["SET user:1 'Alice'", "GET user:1", "EXISTS user:1"])
+```
+返回的聚合信封示例：
+```json
+{
+  "command": "PIPELINE",
+  "status": "success",
+  "total_commands": 3,
+  "results": [
+    { "command": "SET user:1 'Alice'", "result": "OK", "data_type": "string", "is_truncated": false, "total_count": null },
+    { "command": "GET user:1", "result": "Alice", "data_type": "string", "is_truncated": false, "total_count": null },
+    { "command": "EXISTS user:1", "result": 1, "data_type": "integer", "is_truncated": false, "total_count": null }
+  ],
+  "data_type": "pipeline",
+  "is_truncated": false,
+  "total_count": 3
+}
+```
+
+### 7. 阻塞式命令超时主动安全防线 (`BLPOP` 等)
+当模型调度阻塞式读取命令（如 `BLPOP queue 0`）时，零超时（无限等待）会导致底层异步 Socket 永久挂起、MCP 进程假死。
+安全守卫自动执行**超时参数主动安全收敛**：超时为 0 强制安全改写为 2 秒，超时超过 5 秒强制截断为 5 秒，并在信封中回传说明信息：
+```python
+redis_execute_command(command="BLPOP task_queue 0")
+```
+返回结果示例：
+```json
+{
+  "command": "BLPOP task_queue 0",
+  "result": null,
+  "data_type": "none",
+  "message": "阻塞命令 'BLPOP' 超时设为 0（零超时无限等待），为防止 MCP 服务进程挂起假死，已主动安全收敛改写为 2 秒。",
+  "is_truncated": false,
+  "total_count": null
+}
+```
+
 ---
 
 ## 🔍 核心探查辅助工具调用与返回示例
@@ -211,11 +253,15 @@ redis_list_connections()
 }
 ```
 
-### 2. 聚合键扫描器 (`redis_scan_keys`)
-支持常规扫描与 `include_meta=True` 复合元数据扫描，在单次往返中并发拿齐键类型与 TTL，彻底终结 N+1：
+### 2. 聚合键扫描器与断点续翻 (`redis_scan_keys`)
+支持常规扫描、`cursor` 断点续翻与 `include_meta=True` 复合元数据扫描，在单次往返中并发拿齐键类型与 TTL，彻底终结 N+1：
 ```python
-# 开启 include_meta=True 一站式扫描
-redis_scan_keys(pattern="user:*", limit=10, include_meta=True)
+# 1. 开启 include_meta=True 一站式扫描
+res = redis_scan_keys(pattern="user:*", limit=10, include_meta=True)
+
+# 2. 依据上一页返回的游标实现断点续翻分页
+if res["is_truncated"] and res["cursor"] > 0:
+    res_page2 = redis_scan_keys(pattern="user:*", limit=10, cursor=res["cursor"], include_meta=True)
 ```
 返回结果：
 ```json

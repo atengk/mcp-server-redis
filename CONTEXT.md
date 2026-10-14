@@ -134,5 +134,22 @@ _避免使用_: 静态数据源 (Static Data Source)、资源文件 (Resource Fi
 向大模型客户端预置的标准运维与排障排查工作流模板，指导大模型以最少指令高效闭环排查业务异常。  
 _避免使用_: 快捷指令 (Shortcuts)、聊天模板 (Chat Template)
 
+**游标续翻扫描 (Cursor-Resumable Scan)**:
+允许客户端显式传入上轮迭代游标以无缝续查后续键空间的非阻塞分页模式，彻底解决海量键无法获取第二页的断层问题。  
+_避免使用_: 伪分页 (Pseudo Paging)、偏移量翻页 (Offset Paging)
+
+**零超时阻塞防线 (Zero-Timeout Blocking Guard)**:
+针对 `BLPOP`/`BRPOP` 等阻塞式读取指令实施的主动防御，将无限挂起超时期（0）与超长超时强制收敛至安全短时阈值，规避 MCP 工作进程被永久锁死。  
+_避免使用_: 进程挂起 (Process Hang)、无限等待 (Infinite Wait)
+
+**连接空闲心跳 (Connection Idle Heartbeat)**:
+在连接池生命周期内开启的周期性后台探活与超时重试机制，杜绝长连接常驻会话遭遇防火墙丢弃或服务端关闭时的静默断连崩溃。  
+_避免使用_: 死连接 (Dead Connection)、半开连接 (Half-Open Socket)
+
+**管道批处理网关 (Pipeline Batch Gateway)**:
+在单次 MCP 工具调用中通过 Redis Pipeline 打包顺序执行多条命令并聚合返回执行信封的高性能执行通道，大幅压缩大模型多命令交互轮次。  
+_避免使用_: 多轮往返 (Multi-Roundtrip)、顺序串行调度 (Sequential Dispatch)
+
+
 
 

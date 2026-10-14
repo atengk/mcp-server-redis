@@ -77,6 +77,7 @@ async def redis_scan_keys(
     registry: ConnectionRegistry,
     pattern: str = "*",
     limit: int = DEFAULT_SCAN_LIMIT,
+    cursor: int = 0,
     type: str | None = None,
     connection: str | None = None,
     db: int | None = None,
@@ -85,12 +86,14 @@ async def redis_scan_keys(
     """使用非阻塞式聚合扫描器检索匹配的键名列表。
 
     服务内部自动循环调度游标并累积匹配键，对外屏蔽游标轮询复杂度，
+    支持传入上一页返回的 cursor 实现单机断点续翻（从 0 开始扫描）。
     单次强制限制最多返回 200 条，防范大规模数据撑爆上下文。
     若开启 include_meta=True，将并行拉取每个键的 type 与 ttl 元数据，终结 N+1 交互。
 
     @param registry 连接注册中心实例
     @param pattern 键名匹配模式通配符（支持 *、? 等，默认 '*'）
     @param limit 最大返回条数（默认 50，硬上限 200）
+    @param cursor 起始扫描游标（默认 0，支持传入上一页返回的游标实现断点续翻）
     @param type 目标键类型过滤（支持 string/hash/list/set/zset/stream，可选）
     @param connection 目标连接别名（可选，缺省为默认连接）
     @param db 目标数据库编号（可选，0~15）
@@ -145,6 +148,11 @@ async def redis_scan_keys(
             "cursor": 0,
             "is_truncated": truncated,
         }
+        if cursor > 0:
+            result_payload["message"] = (
+                "Redis Cluster 分片集群采用全局节点迭代，已聚合返回当前批次键；"
+                "若需缩小范围建议细化 pattern 或调整 limit。"
+            )
         if include_meta:
             result_payload["entries"] = (
                 await _fetch_keys_metadata(client, final_keys) if final_keys else []
@@ -153,20 +161,20 @@ async def redis_scan_keys(
         return result_payload
 
     # 2. 单机模式：通过游标循环非阻塞聚合扫描
-    cursor: int = 0
+    current_cursor: int = max(cursor, 0)
     iterations: int = 0
 
     while True:
         iterations += 1
         scan_kwargs: dict[str, Any] = {
-            "cursor": cursor,
+            "cursor": current_cursor,
             "match": pattern,
             "count": effective_limit,
         }
         if type_filter:
             scan_kwargs["_type"] = type_filter
 
-        cursor, batch = await client.scan(**scan_kwargs)
+        current_cursor, batch = await client.scan(**scan_kwargs)
 
         for key_item in batch:
             if isinstance(key_item, bytes):
@@ -184,12 +192,12 @@ async def redis_scan_keys(
         # 3. 达到最大迭代轮次保底限制（防死循环）。
         if (
             len(accumulated_keys) >= effective_limit
-            or cursor == 0
+            or current_cursor == 0
             or iterations >= MAX_SCAN_ITERATIONS
         ):
             break
 
-    truncated = len(accumulated_keys) > effective_limit or cursor != 0
+    truncated = len(accumulated_keys) > effective_limit or current_cursor != 0
     final_keys = accumulated_keys[:effective_limit]
 
     result_payload = {
@@ -197,7 +205,7 @@ async def redis_scan_keys(
         "count": len(final_keys),
         "pattern": pattern,
         "type": type,
-        "cursor": cursor,
+        "cursor": current_cursor,
         "is_truncated": truncated,
     }
     if include_meta:
@@ -284,6 +292,7 @@ def register_key_tools(server: Any, registry: ConnectionRegistry) -> None:
     async def _tool_scan_keys(
         pattern: str = "*",
         limit: int = DEFAULT_SCAN_LIMIT,
+        cursor: int = 0,
         type: str | None = None,
         connection: str | None = None,
         db: int | None = None,
@@ -291,11 +300,13 @@ def register_key_tools(server: Any, registry: ConnectionRegistry) -> None:
     ) -> dict[str, Any]:
         """使用非阻塞式聚合扫描器检索匹配的键名列表，自动处理底层游标分页。
 
+        支持传入上一页返回的 cursor 实现单机断点续翻（从 0 开始扫描）。
         可选择传入 include_meta=True 一次性并发拉取各键的类型与 TTL 元数据，避免 N+1 往返。
 
         Args:
             pattern: 键名匹配模式通配符（默认 '*'）
             limit: 最大返回条数（默认 50，硬上限 200）
+            cursor: 起始扫描游标（默认 0 从头扫描，可传入上一页返回的 cursor 实现单机断点续翻）
             type: 目标键类型过滤（支持 string/hash/list/set/zset/stream，可选）
             connection: 目标连接别名（可选，缺省为默认连接）
             db: 目标数据库编号（可选，0~15）
@@ -305,6 +316,7 @@ def register_key_tools(server: Any, registry: ConnectionRegistry) -> None:
             registry,
             pattern=pattern,
             limit=limit,
+            cursor=cursor,
             type=type,
             connection=connection,
             db=db,

@@ -25,7 +25,13 @@ DESTRUCTIVE_COMMANDS: Final[frozenset[str]] = frozenset(
 # 涉及高危批量/单键删除需二次确认的指令集合
 CONFIRMATION_COMMANDS: Final[frozenset[str]] = frozenset({"DEL", "UNLINK"})
 
+# 容易引发工作进程挂起的阻塞式读取指令集合（需安全收敛超时）
+BLOCKING_COMMANDS: Final[frozenset[str]] = frozenset(
+    {"BLPOP", "BRPOP", "BRPOPLPUSH", "BLMOVE", "BZPOPMIN", "BZPOPMAX"}
+)
+
 # 80+ 常用只读与无副作用命令白名单集合（单动词）
+
 READONLY_COMMANDS: Final[frozenset[str]] = frozenset(
     {
         # String
@@ -238,6 +244,7 @@ class ClassificationResult:
     category: CommandCategory
     keys: list[str] = field(default_factory=list)
     raw_tokens: list[str] = field(default_factory=list)
+    clamped_message: str | None = None
 
     @property
     def is_destructive(self) -> bool:
@@ -324,6 +331,28 @@ class CommandClassifier:
 
         cmd_name = tokens[0].upper()
 
+        # 0. 阻塞命令超时安全收敛（防止 0 秒无限等待挂死 MCP 服务进程，最大限制 5 秒）
+        clamped_msg: str | None = None
+        if cmd_name in BLOCKING_COMMANDS and len(tokens) >= 2:
+            try:
+                timeout_val = float(tokens[-1])
+                if timeout_val <= 0:
+                    tokens = list(tokens)
+                    tokens[-1] = "2"
+                    clamped_msg = (
+                        f"阻塞命令 '{cmd_name}' 超时设为 {timeout_val:g}（零超时无限等待），"
+                        "为防止 MCP 服务进程挂起假死，已主动安全收敛改写为 2 秒。"
+                    )
+                elif timeout_val > 5.0:
+                    tokens = list(tokens)
+                    tokens[-1] = "5"
+                    clamped_msg = (
+                        f"阻塞命令 '{cmd_name}' 超时为 {timeout_val:g} 秒，超过最大安全阈值（5 秒），"
+                        "已主动安全收敛改写为 5 秒。"
+                    )
+            except ValueError:
+                pass
+
         # 1. 物理阻断破坏性指令黑名单（永久物理切断）
         if cmd_name in DESTRUCTIVE_COMMANDS:
             logger.warning("底层物理拦截破坏性指令调度尝试: %s", cmd_name)
@@ -364,6 +393,7 @@ class CommandClassifier:
             command_name=cmd_name,
             category=CommandCategory.WRITE,
             raw_tokens=tokens,
+            clamped_message=clamped_msg,
         )
 
 

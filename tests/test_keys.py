@@ -317,3 +317,48 @@ async def test_redis_scan_keys_cluster_truncated(
         assert res["keys"] == ["item:0", "item:1", "item:2"]
         assert res["cursor"] == 0
         assert res["is_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_redis_scan_keys_with_resume_cursor(
+    sample_registry: ConnectionRegistry,
+) -> None:
+    """验证 redis_scan_keys 接收上一页游标并恢复断点扫描。"""
+    mock_client = AsyncMock()
+    mock_client.scan = AsyncMock(return_value=(88, [b"k:10", b"k:11"]))
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        # 传入上一页返回的 cursor=42
+        res = await redis_scan_keys(sample_registry, pattern="k:*", limit=2, cursor=42)
+
+        assert res["cursor"] == 88
+        assert res["keys"] == ["k:10", "k:11"]
+        assert res["count"] == 2
+        assert res["is_truncated"] is True
+        mock_client.scan.assert_called_once_with(cursor=42, match="k:*", count=2)
+
+
+@pytest.mark.asyncio
+async def test_redis_scan_keys_cluster_with_cursor_warning(
+    sample_registry: ConnectionRegistry,
+) -> None:
+    """验证 RedisCluster 模式下若传入 cursor > 0，自适应降级并返回引导提示。"""
+    from redis.asyncio.cluster import RedisCluster
+
+    mock_cluster = AsyncMock(spec=RedisCluster)
+
+    async def _async_scan_iter(
+        match: str | None = None, count: int | None = None, _type: str | None = None
+    ) -> AsyncIterator[str]:
+        yield "c:1"
+        yield "c:2"
+
+    mock_cluster.scan_iter = _async_scan_iter
+
+    with patch.object(sample_registry, "get_client", return_value=mock_cluster):
+        res = await redis_scan_keys(sample_registry, pattern="c:*", limit=10, cursor=10)
+
+        assert res["cursor"] == 0
+        assert res["count"] == 2
+        assert "message" in res
+        assert "Redis Cluster 分片集群采用全局节点迭代" in res["message"]
