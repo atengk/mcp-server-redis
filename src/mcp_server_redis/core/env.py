@@ -43,6 +43,17 @@ _DEFAULT_SOCKET_TIMEOUT: Final[float] = 10.0
 _DEFAULT_MAX_CONNECTIONS: Final[int] = 50
 # 默认高危无界全量读取最大安全阈值（项数）
 _DEFAULT_MAX_UNBOUNDED_READ_ITEMS: Final[int] = 2000
+# 默认 MCP 服务实例名称
+_DEFAULT_SERVER_NAME: Final[str] = "mcp-server-redis"
+# 默认系统级大模型指导指令
+_DEFAULT_SERVER_INSTRUCTIONS: Final[str] = (
+    "本服务是专为生产环境打造的 Redis MCP 网关。\n"
+    "核心交互指导原则：\n"
+    "1. 默认全局只读，破坏性命令（FLUSHALL/KEYS 等）被物理阻断；\n"
+    "2. 当配置多个 Redis 实例时，请根据业务意图或键名前缀（key_patterns）在工具调用中传入对应的 connection 别名；\n"
+    "3. 大集合读取推荐使用 HSCAN/SSCAN/ZSCAN 等渐进式切片命令，避免全量读取阻塞 Redis 主线程；\n"
+    "4. 删除操作（DEL/UNLINK）需显式声明 confirm=True 确认执行。"
+)
 
 
 def load_dotenv_if_exists(dotenv_path: Path | str | None = None) -> bool:
@@ -392,6 +403,30 @@ def resolve_max_unbounded_read_items_from_env() -> int:
         return _DEFAULT_MAX_UNBOUNDED_READ_ITEMS
 
 
+def resolve_server_name_from_env() -> str:
+    """从环境变量解析 MCP 服务实例名称。
+
+    读取 `MCP_REDIS_SERVER_NAME` 环境变量，未设置或为空字符串时返回默认值 "mcp-server-redis"。
+
+    @return 服务实例名称
+    """
+    val = os.getenv("MCP_REDIS_SERVER_NAME")
+    return val.strip() if val and val.strip() else _DEFAULT_SERVER_NAME
+
+
+def resolve_server_instructions_from_env() -> str | None:
+    """从环境变量解析系统级大模型指导指令。
+
+    读取 `MCP_REDIS_SERVER_INSTRUCTIONS` 环境变量，未设置时返回默认指导指令。
+
+    @return 指导指令字符串或默认内置指令
+    """
+    val = os.getenv("MCP_REDIS_SERVER_INSTRUCTIONS")
+    if val is not None and val.strip():
+        return val.strip()
+    return _DEFAULT_SERVER_INSTRUCTIONS
+
+
 class ServerConfig(NamedTuple):
     """服务端运行时生效配置对象。
 
@@ -412,6 +447,8 @@ class ServerConfig(NamedTuple):
     @property socket_timeout 指令超时秒数（默认 10.0）
     @property audit_log 审计日志输出路径或目标（默认 None）
     @property max_unbounded_read_items 高危无界读取最大安全阈值（默认 2000）
+    @property server_name MCP 服务实例名称（默认 "mcp-server-redis"）
+    @property server_instructions 系统级大模型指导指令
     """
 
     url: str
@@ -427,6 +464,8 @@ class ServerConfig(NamedTuple):
     socket_timeout: float = _DEFAULT_SOCKET_TIMEOUT
     audit_log: str | None = None
     max_unbounded_read_items: int = _DEFAULT_MAX_UNBOUNDED_READ_ITEMS
+    server_name: str = _DEFAULT_SERVER_NAME
+    server_instructions: str | None = None
 
 
 def resolve_server_configuration(
@@ -443,6 +482,8 @@ def resolve_server_configuration(
     cli_socket_connect_timeout: float | None = None,
     cli_socket_timeout: float | None = None,
     cli_max_unbounded_read_items: int | None = None,
+    cli_server_name: str | None = None,
+    cli_server_instructions: str | None = None,
 ) -> ServerConfig:
     """统一决议服务端最终启动配置参数。
 
@@ -462,6 +503,8 @@ def resolve_server_configuration(
     @param cli_socket_connect_timeout CLI 传入的连接超时（可选）
     @param cli_socket_timeout CLI 传入的指令超时（可选）
     @param cli_max_unbounded_read_items CLI 传入的无界读取阈值（可选）
+    @param cli_server_name CLI 传入的 MCP 服务名称（可选）
+    @param cli_server_instructions CLI 传入的系统级指导指令（可选）
     @return ServerConfig 命名元组
     """
     # 1. 尝试探测并安全载入 .env 文件
@@ -542,6 +585,18 @@ def resolve_server_configuration(
         else resolve_max_unbounded_read_items_from_env()
     )
 
+    # 13. 决议生效服务名称与系统指导指令（CLI > 环境变量 > 默认保底）
+    effective_server_name = (
+        cli_server_name.strip()
+        if cli_server_name and cli_server_name.strip()
+        else resolve_server_name_from_env()
+    )
+    effective_server_instructions = (
+        cli_server_instructions.strip()
+        if cli_server_instructions and cli_server_instructions.strip()
+        else resolve_server_instructions_from_env()
+    )
+
     return ServerConfig(
         url=effective_url,
         config=effective_config,
@@ -556,4 +611,6 @@ def resolve_server_configuration(
         socket_timeout=effective_socket_timeout,
         audit_log=effective_audit_log,
         max_unbounded_read_items=effective_max_unbounded,
+        server_name=effective_server_name,
+        server_instructions=effective_server_instructions,
     )

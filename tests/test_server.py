@@ -120,6 +120,8 @@ def test_build_argument_parser_defaults() -> None:
     assert args.port is None
     assert args.cluster is False
     assert args.audit_log is None
+    assert args.server_name is None
+    assert args.server_instructions is None
     assert args.doctor is False
     assert args.json is False
 
@@ -142,6 +144,10 @@ def test_parse_cli_arguments_custom_values() -> None:
             "--cluster",
             "--audit-log",
             "stderr",
+            "--server-name",
+            "custom-redis-srv",
+            "--server-instructions",
+            "自定义业务系统提示",
             "--doctor",
             "--json",
         ]
@@ -156,6 +162,8 @@ def test_parse_cli_arguments_custom_values() -> None:
     assert config_dict["port"] == 8888
     assert config_dict["cluster"] is True
     assert config_dict["audit_log"] == "stderr"
+    assert config_dict["server_name"] == "custom-redis-srv"
+    assert config_dict["server_instructions"] == "自定义业务系统提示"
     assert config_dict["doctor"] is True
     assert config_dict["json"] is True
 
@@ -329,3 +337,21 @@ async def test_health_and_healthz_routes() -> None:
         assert body_fail["status"] == "unhealthy"
         assert body_fail["redis"] == "error"
         assert "Connection refused" in body_fail["error"]
+
+
+def test_create_app_server_identity_and_instructions() -> None:
+    """验证 create_app 正确将 server_name 与 server_instructions 设置到 FastMCP 实例中。"""
+    # 1. 默认设置
+    app_default = create_app(url="redis://localhost:6379/0")
+    assert app_default.name == "mcp-server-redis"
+    assert app_default.instructions is not None
+    assert "生产环境" in app_default.instructions
+
+    # 2. 自定义参数设置
+    app_custom = create_app(
+        url="redis://localhost:6379/0",
+        server_name="order-center-redis",
+        server_instructions="专门处理订单与库存业务",
+    )
+    assert app_custom.name == "order-center-redis"
+    assert app_custom.instructions == "专门处理订单与库存业务"

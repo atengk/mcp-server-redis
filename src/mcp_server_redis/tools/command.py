@@ -14,7 +14,7 @@ from typing import Any, Final
 from redis.exceptions import ClusterCrossSlotError, RedisError, ResponseError
 
 from mcp_server_redis.core.audit import AuditLogger
-from mcp_server_redis.core.connection import ConnectionRegistry
+from mcp_server_redis.core.connection import ConnectionNotFoundError, ConnectionRegistry
 from mcp_server_redis.core.env import resolve_max_unbounded_read_items_from_env
 from mcp_server_redis.core.guard import SecurityGuard
 from mcp_server_redis.core.serializer import SafeSerializer
@@ -134,7 +134,37 @@ async def redis_execute_command(
     """
     start_time = time.perf_counter()
     active_guard = guard or _default_guard
-    profile = registry.get_profile(alias=connection)
+
+    try:
+        profile = registry.get_profile(alias=connection)
+    except ConnectionNotFoundError:
+        not_found_msg = registry.format_not_found_message(connection or "")
+        logger.warning("指定了不存在的 Redis 连接别名 '%s'", connection)
+        if audit_logger:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            audit_logger.log(
+                command=command or "PIPELINE",
+                connection=connection or "unknown",
+                db=db or 0,
+                duration_ms=duration_ms,
+                status="error",
+                error_type="ConnectionNotFoundError",
+                error_message=not_found_msg,
+            )
+        err_envelope: dict[str, Any] = {
+            "command": command or "PIPELINE",
+            "status": "error",
+            "error_type": "ConnectionNotFoundError",
+            "result": not_found_msg,
+            "data_type": "error",
+            "message": not_found_msg,
+            "is_truncated": False,
+            "total_count": None,
+        }
+        if commands is not None:
+            err_envelope["commands"] = commands
+        return err_envelope
+
     effective_alias = connection or (profile.alias if profile else "default")
     effective_db = db if db is not None else (profile.db if profile else 0)
     effective_max_unbounded = (
@@ -553,8 +583,8 @@ def register_command_tools(
         max_unbounded_read_items: 无界全量读取安全阈值
     """
     active_guard = guard or _default_guard
+    conn_hint = registry.format_connection_hint_for_llm()
 
-    @server.tool(name="redis_execute_command")  # type: ignore[untyped-decorator]
     async def _tool_execute_command(
         command: str = "",
         commands: list[str] | None = None,
@@ -562,28 +592,6 @@ def register_command_tools(
         db: int | None = None,
         confirm: bool = False,
     ) -> dict[str, Any]:
-        """执行单行原生 Redis 命令或多命令管道批处理（核心命令网关）。
-
-        支持单行原生 Redis 语法与标准引号分词（如 'GET key', 'SET key "hello world"'）。
-        支持通过 'commands' 传入命令列表执行管道批处理（上限 20 条），在单一网络往返中批量极速执行。
-        内置破坏性指令物理阻断（FLUSHALL/KEYS 等）、Fail-Close 阶梯写门禁与高危删除二次确认保护。
-        自动对阻塞式读取指令（BLPOP/BRPOP 等）的安全超时进行收敛改写，彻底杜绝服务假死。
-        针对 HGETALL/SMEMBERS/LRANGE/ZRANGE 等无界全量读取执行 O(1) 探查预检，防止 Redis 单线程锁死。
-        大集合返回结果自动安全切片截断（上限 100 项），防止客户端内存溢出与上下文爆炸。
-
-        提示：在生产环境中读取大型 Hash/Set/ZSet 数据时，推荐优先使用 HSCAN/SSCAN/ZSCAN 等渐进式切片命令，
-        避免使用 HGETALL/SMEMBERS 等全量 O(N) 命令阻塞 Redis 单线程主循环。
-
-        Args:
-            command: 原生 Redis 命令行字符串（如 'GET user:1001'，与 commands 二选一）
-            commands: 原生 Redis 命令行列表（用于单往返管道批处理执行，上限 20 条）
-            connection: 目标连接别名（可选，缺省使用默认连接）
-            db: 逻辑库编号（可选，0~15，集群模式下忽略并绑定 db=0）
-            confirm: 是否确认执行高危删除操作（仅对 DEL/UNLINK 命令生效，未确认时返回待确认详情）
-
-        Returns:
-            dict[str, Any]: 统一信封结果字典，包含 command, result, data_type, is_truncated 等元数据
-        """
         return await redis_execute_command(
             registry=registry,
             command=command,
@@ -595,3 +603,27 @@ def register_command_tools(
             audit_logger=audit_logger,
             max_unbounded_read_items=max_unbounded_read_items,
         )
+
+    _tool_execute_command.__doc__ = f"""执行单行原生 Redis 命令或多命令管道批处理（核心命令网关）。
+
+支持单行原生 Redis 语法与标准引号分词（如 'GET key', 'SET key "hello world"'）。
+支持通过 'commands' 传入命令列表执行管道批处理（上限 20 条），在单一网络往返中批量极速执行。
+内置破坏性指令物理阻断（FLUSHALL/KEYS 等）、Fail-Close 阶梯写门禁与高危删除二次确认保护。
+自动对阻塞式读取指令（BLPOP/BRPOP 等）的安全超时进行收敛改写，彻底杜绝服务假死。
+针对 HGETALL/SMEMBERS/LRANGE/ZRANGE 等无界全量读取执行 O(1) 探查预检，防止 Redis 单线程锁死。
+大集合返回结果自动安全切片截断（上限 100 项），防止客户端内存溢出与上下文爆炸。
+
+提示：在生产环境中读取大型 Hash/Set/ZSet 数据时，推荐优先使用 HSCAN/SSCAN/ZSCAN 等渐进式切片命令，
+避免使用 HGETALL/SMEMBERS 等全量 O(N) 命令阻塞 Redis 单线程主循环。
+
+Args:
+    command: 原生 Redis 命令行字符串（如 'GET user:1001'，与 commands 二选一）
+    commands: 原生 Redis 命令行列表（用于单往返管道批处理执行，上限 20 条）
+    connection: {conn_hint}
+    db: 逻辑库编号（可选，0~15，集群模式下忽略并绑定 db=0）
+    confirm: 是否确认执行高危删除操作（仅对 DEL/UNLINK 命令生效，未确认时返回待确认详情）
+
+Returns:
+    dict[str, Any]: 统一信封结果字典，包含 command, result, data_type, is_truncated 等元数据
+"""
+    server.tool(name="redis_execute_command")(_tool_execute_command)

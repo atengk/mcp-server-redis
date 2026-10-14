@@ -629,6 +629,8 @@ uvx atengk-mcp-server-redis --transport sse --host 0.0.0.0 --port 8000
 | `MCP_REDIS_TRANSPORT` | `stdio` | 传输协议模式。可选 `stdio` 或 `sse`（大小写不敏感） |
 | `MCP_REDIS_SERVER_HOST` | `0.0.0.0` | SSE 传输网关绑定的监听主机地址 |
 | `MCP_REDIS_SERVER_PORT` | `8000` | SSE 传输网关绑定的 HTTP 监听端口 |
+| `MCP_REDIS_SERVER_NAME` | `mcp-server-redis` | MCP 协议服务实例名称标识（映射 `--server-name`） |
+| `MCP_REDIS_SERVER_INSTRUCTIONS` | 内置指导 | 向大模型注入的全局系统级业务指导指令（映射 `--server-instructions`） |
 
 ### 3. 安全权限与网络治理
 | 环境变量名 | 默认值 | 作用与用法示例 |
@@ -668,18 +670,21 @@ connections:
     url: "redis://localhost:6379/0"
     readonly: false
     description: "本地开发实例（读写）"
+    key_patterns: ["*"]
     db: 0
 
-  staging:
-    url: "redis://:stage_pass@staging.redis.internal:6379/1"
+  user-cache:
+    url: "redis://:stage_pass@user.redis.internal:6379/0"
     readonly: false
-    description: "预发布环境"
-    db: 1
+    description: "用户中心会话与 Token 缓存"
+    key_patterns: ["token:*", "user:*", "session:*"]
+    db: 0
 
-  prod-readonly:
-    url: "redis://:prod_pass@prod.redis.internal:6379/0"
+  order-cache:
+    url: "redis://:prod_pass@order.redis.internal:6379/0"
     readonly: true
-    description: "生产环境从库（绝对只读保护）"
+    description: "订单与库存热点从库（绝对只读保护）"
+    key_patterns: ["order:*", "stock:*"]
     db: 0
 ```
 
@@ -688,7 +693,10 @@ connections:
 uvx atengk-mcp-server-redis --config ./connections.yaml --allow-write
 ```
 
-> **安全注意**：即使启动时指定了 `--allow-write`，在配置文件中被标记为 `readonly: true` 的连接（如上述 `prod-readonly`）仍将受到物理写保护，绝对拒绝任何数据变更！
+> **大模型智能感知与自愈路由**：
+> 1. **动态 Schema 注入**：启动加载配置文件后，服务端会自动将各连接别名、只读属性、业务描述与 `key_patterns` 编译进所有 MCP 工具的 `connection` 参数文档。大模型在接收任务时（如“查询 order:1001 的状态”）无需手动探查即可根据前缀特征自动选用 `order-cache`；
+> 2. **异常自愈引导**：当大模型传入了未知的连接别名时，服务不会直接崩溃抛错，而是返回标准化的错误信封并列出所有可用别名清单，驱动大模型自我纠错并重试；
+> 3. **安全注意**：即使启动时指定了 `--allow-write`，在配置文件中被标记为 `readonly: true` 的连接（如上述 `order-cache`）仍将受到物理写保护，绝对拒绝任何数据变更！
 
 ---
 

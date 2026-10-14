@@ -102,6 +102,7 @@ class ConnectionProfile(BaseModel):
     url: str
     readonly: bool = True
     description: str = ""
+    key_patterns: list[str] = Field(default_factory=list)
     db: int = Field(default=0, ge=0, le=15)
     is_cluster: bool = False
     max_connections: int = 50
@@ -177,6 +178,7 @@ class _RawConnectionEntry(BaseModel):
     url: str
     readonly: bool = True
     description: str = ""
+    key_patterns: list[str] = Field(default_factory=list)
     db: int | None = Field(default=None, ge=0, le=15)
     cluster: bool = False
     socket_connect_timeout: float | None = None
@@ -253,6 +255,78 @@ class ConnectionRegistry:
         @return 连接档案列表，空时返回空列表
         """
         return list(self._profiles.values())
+
+    def format_connection_hint_for_llm(self) -> str:
+        """为大语言模型格式化 Tool Schema 中的 connection 参数说明。
+
+        根据当前注册的连接档案数量自适应呈现：
+        - 单连接或未注册：输出极简提示；
+        - 多连接：输出结构化 Markdown 清单，标明默认标识、只读属性、业务描述及键模式。
+
+        @return 注入到工具文档字符串的格式化文本
+        """
+        profiles = list(self._profiles.values())
+        if not profiles:
+            return "目标连接别名（可选，缺省使用默认连接）"
+
+        if len(profiles) == 1:
+            default_p = profiles[0]
+            desc_part = f": {default_p.description}" if default_p.description else ""
+            pattern_part = (
+                f" (键模式: {', '.join(default_p.key_patterns)})" if default_p.key_patterns else ""
+            )
+            return (
+                f"目标连接别名（可选，当前系统仅配置单连接 '{default_p.alias}'"
+                f"{desc_part}{pattern_part}，缺省直接使用）"
+            )
+
+        lines = [
+            f"目标连接别名（可选，缺省使用默认连接 '{self.default_alias}'）。当前可用连接清单："
+        ]
+        for p in profiles:
+            badges: list[str] = []
+            if p.alias == self.default_alias:
+                badges.append("默认")
+            if p.readonly:
+                badges.append("只读")
+            badge_str = f" [{' / '.join(badges)}]" if badges else ""
+
+            desc_str = f": {p.description}" if p.description else ""
+            pattern_str = f" (键模式: {', '.join(p.key_patterns)})" if p.key_patterns else ""
+
+            lines.append(f"- '{p.alias}'{badge_str}{desc_str}{pattern_str}")
+
+        return "\n".join(lines)
+
+    def format_not_found_message(self, alias: str) -> str:
+        """生成友好的连接不存在错误与自愈指引文本。
+
+        @param alias 传入的未知连接别名
+        @return 包含自愈清单的详细提示文本
+        """
+        profiles = list(self._profiles.values())
+        if len(profiles) <= 1:
+            default_name = self.default_alias if profiles else "default"
+            return (
+                f"指定的连接别名 '{alias}' 不存在。当前系统仅配置了单连接 '{default_name}'，"
+                "请直接使用该连接或无需传递 connection 参数。"
+            )
+
+        lines = [
+            f"指定的连接别名 '{alias}' 不存在。当前可用的连接清单如下，请从列表中选择正确的连接别名重新执行："
+        ]
+        for p in profiles:
+            badges: list[str] = []
+            if p.alias == self.default_alias:
+                badges.append("默认")
+            if p.readonly:
+                badges.append("只读")
+            badge_str = f" [{' / '.join(badges)}]" if badges else ""
+            desc_str = f": {p.description}" if p.description else ""
+            pattern_str = f" (键模式: {', '.join(p.key_patterns)})" if p.key_patterns else ""
+            lines.append(f"- '{p.alias}'{badge_str}{desc_str}{pattern_str}")
+
+        return "\n".join(lines)
 
     def is_readonly(self, alias: str | None = None) -> bool:
         """查询指定连接是否为只读。
@@ -366,6 +440,7 @@ class ConnectionRegistry:
         socket_connect_timeout: float | None = None,
         socket_timeout: float | None = None,
         max_connections: int | None = None,
+        key_patterns: list[str] | None = None,
     ) -> "ConnectionRegistry":
         """从单个 Redis URL 构造极简连接注册中心。
 
@@ -377,6 +452,7 @@ class ConnectionRegistry:
         @param socket_connect_timeout Socket 连接超时秒数（可选）
         @param socket_timeout Socket 指令超时秒数（可选）
         @param max_connections 连接池最大连接数（可选，默认 50）
+        @param key_patterns 键模式特征清单（可选）
         @return 已装配好默认连接的注册中心实例
         """
         registry = cls(default_alias=alias)
@@ -387,6 +463,8 @@ class ConnectionRegistry:
             "description": description,
             "is_cluster": is_cluster,
         }
+        if key_patterns is not None:
+            profile_kwargs["key_patterns"] = key_patterns
         if socket_connect_timeout is not None:
             profile_kwargs["socket_connect_timeout"] = socket_connect_timeout
         if socket_timeout is not None:
@@ -444,6 +522,8 @@ class ConnectionRegistry:
                 "description": entry.description,
                 "is_cluster": entry.cluster,
             }
+            if entry.key_patterns:
+                profile_kwargs["key_patterns"] = entry.key_patterns
             if entry.db is not None:
                 profile_kwargs["db"] = entry.db
             if entry.socket_connect_timeout is not None:

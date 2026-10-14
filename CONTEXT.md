@@ -177,3 +177,23 @@ _避免使用_: 裸版本号 (Raw Version)、字符串版本 (String Version)
 **隔离写探针 (Isolated Write Probe)**:
 自检诊断器在验证实际写权限时使用的纳秒级 UUID 隔离键（`__mcp_doctor_probe_{uuid}__`）、5 秒双保险 TTL 校验与即时物理清理机制，杜绝生产脏数据残留。  
 _避免使用_: 脏写测试 (Dirty Write)、业务键覆盖 (Business Key Overwrite)
+
+**服务标识 (Server Name)**:
+MCP 协议握手层声明的服务实例名称（通过 `--server-name` 与 `MCP_REDIS_SERVER_NAME` 配置）。专用于多 MCP 服务挂载时供宿主客户端识别服务身份，底层工具名称始终保持稳定不变量。  
+_避免使用_: 服务别名 (Server Alias)、工具前缀 (Tool Prefix)
+
+**系统指令 (Server Instructions)**:
+通过 MCP 协议握手直接向大语言模型注入的系统级业务指导与拓扑边界说明（通过 `--server-instructions` 与 `MCP_REDIS_SERVER_INSTRUCTIONS` 配置），明确该 MCP 服务的业务职责与规范。  
+_避免使用_: 提示词模板 (Prompt Template)、聊天前置词 (Chat Prefix)
+
+**动态连接提示 (Dynamic Connection Hints)**:
+服务启动装配工具时根据实际加载的连接注册表动态编译拼入 Tool Schema（`connection` 参数说明）的连接拓扑结构，消除大模型的盲查猜测并实现零额外往返意图匹配。  
+_避免使用_: 静态文档 (Static Doc)、固定说明 (Hardcoded Hints)
+
+**键模式规则 (Key Patterns)**:
+在多连接配置档案中声明的业务键前缀通配特征列表（`key_patterns`），为大模型根据输入键名自动路由至匹配物理库提供先验线索。  
+_避免使用_: 键正则 (Key Regex)、路由标签 (Routing Tags)
+
+**自愈引导信封 (Self-Healing Envelope)**:
+当大模型传入不存在的连接别名时返回的标准化错误信封，主动反馈全量可用连接清单与业务描述，驱动大模型自我纠错并自主重试。  
+_避免使用_: 裸异常抛出 (Raw Exception Throwing)、静默降级 (Silent Fallback)

@@ -24,6 +24,8 @@ from mcp_server_redis.core.env import (
     resolve_redis_url_from_env,
     resolve_server_configuration,
     resolve_server_host_from_env,
+    resolve_server_instructions_from_env,
+    resolve_server_name_from_env,
     resolve_server_port_from_env,
     resolve_socket_timeout_from_env,
     resolve_transport_from_env,
@@ -501,3 +503,58 @@ def test_resolve_max_unbounded_read_items_from_env() -> None:
 
     with patch.dict(os.environ, {"MCP_REDIS_MAX_UNBOUNDED_READ_ITEMS": "abc"}, clear=True):
         assert resolve_max_unbounded_read_items_from_env() == 2000
+
+
+def test_resolve_server_name_from_env() -> None:
+    """验证从环境变量解析服务名称标识（缺省 'mcp-server-redis'）。"""
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_server_name_from_env() == "mcp-server-redis"
+
+    with patch.dict(os.environ, {"MCP_REDIS_SERVER_NAME": "order-redis"}, clear=True):
+        assert resolve_server_name_from_env() == "order-redis"
+
+    with patch.dict(os.environ, {"MCP_REDIS_SERVER_NAME": "   "}, clear=True):
+        assert resolve_server_name_from_env() == "mcp-server-redis"
+
+
+def test_resolve_server_instructions_from_env() -> None:
+    """验证从环境变量解析系统级指导指令（缺省内置指导）。"""
+    with patch.dict(os.environ, {}, clear=True):
+        instr = resolve_server_instructions_from_env()
+        assert instr is not None
+        assert "专为生产环境打造" in instr
+
+    custom_instr = "本服务专用于订单中心缓存"
+    with patch.dict(os.environ, {"MCP_REDIS_SERVER_INSTRUCTIONS": custom_instr}, clear=True):
+        assert resolve_server_instructions_from_env() == custom_instr
+
+
+def test_resolve_server_configuration_server_identity_priority() -> None:
+    """验证服务名称与指令分级决议优先级（CLI > 环境变量 > 默认保底）。"""
+    # 1. 默认缺省
+    with patch.dict(os.environ, {}, clear=True):
+        cfg = resolve_server_configuration()
+        assert cfg.server_name == "mcp-server-redis"
+        assert cfg.server_instructions is not None
+        assert "生产环境打造" in cfg.server_instructions
+
+    # 2. 环境变量决议
+    with patch.dict(
+        os.environ,
+        {
+            "MCP_REDIS_SERVER_NAME": "env-redis",
+            "MCP_REDIS_SERVER_INSTRUCTIONS": "env instructions",
+        },
+        clear=True,
+    ):
+        cfg = resolve_server_configuration()
+        assert cfg.server_name == "env-redis"
+        assert cfg.server_instructions == "env instructions"
+
+        # 3. CLI 绝对优先于环境变量
+        cfg_cli = resolve_server_configuration(
+            cli_server_name="cli-redis",
+            cli_server_instructions="cli instructions",
+        )
+        assert cfg_cli.server_name == "cli-redis"
+        assert cfg_cli.server_instructions == "cli instructions"

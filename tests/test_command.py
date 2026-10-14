@@ -780,3 +780,66 @@ async def test_redis_execute_command_audit_logger_integration(
         assert call_kwargs["command"] == "PING"
         assert call_kwargs["status"] == "success"
         assert "duration_ms" in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_connection_not_found_envelope(
+    sample_registry: ConnectionRegistry,
+    readonly_guard: SecurityGuard,
+) -> None:
+    """验证传入不存在的连接别名时返回标准化自愈错误信封。"""
+    res = await redis_execute_command(
+        registry=sample_registry,
+        command="GET mykey",
+        guard=readonly_guard,
+        connection="non_existent_conn",
+    )
+    assert res["status"] == "error"
+    assert res["error_type"] == "ConnectionNotFoundError"
+    assert "指定的连接别名 'non_existent_conn' 不存在" in res["message"]
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_pipeline_connection_not_found_envelope(
+    sample_registry: ConnectionRegistry,
+    readonly_guard: SecurityGuard,
+) -> None:
+    """验证管道批处理传入不存在的连接别名时返回标准化自愈错误信封。"""
+    res = await redis_execute_command(
+        registry=sample_registry,
+        commands=["GET k1", "GET k2"],
+        guard=readonly_guard,
+        connection="non_existent_conn",
+    )
+    assert res["status"] == "error"
+    assert res["error_type"] == "ConnectionNotFoundError"
+    assert "指定的连接别名 'non_existent_conn' 不存在" in res["message"]
+
+
+def test_register_command_tools_docstring_hint_injection() -> None:
+    """验证向 FastMCP 注册命令工具时动态注入连接提示。"""
+    mock_server = MagicMock()
+    reg = ConnectionRegistry(default_alias="local")
+    from mcp_server_redis.core.connection import ConnectionProfile
+
+    reg.register(
+        ConnectionProfile(
+            alias="local",
+            url="redis://localhost:6379/0",
+            readonly=False,
+            description="本地测试库",
+            key_patterns=["test:*"],
+        ),
+        is_default=True,
+    )
+    from mcp_server_redis.tools.command import register_command_tools
+
+    mock_decorator = MagicMock()
+    mock_server.tool.return_value = mock_decorator
+    register_command_tools(mock_server, reg)
+    mock_server.tool.assert_called_once_with(name="redis_execute_command")
+    tool_fn = mock_decorator.call_args[0][0]
+    assert tool_fn.__doc__ is not None
+    assert "connection: 目标连接别名" in tool_fn.__doc__
+    assert "本地测试库" in tool_fn.__doc__
+    assert "键模式: test:*" in tool_fn.__doc__

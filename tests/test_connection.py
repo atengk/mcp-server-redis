@@ -300,3 +300,135 @@ async def test_registry_cluster_client_creation_and_db_guard() -> None:
         # 验证缓存复用
         client2 = registry.get_client(alias="my-cluster", db=2)
         assert client2 is mock_client
+
+
+def test_connection_profile_key_patterns() -> None:
+    """验证 ConnectionProfile 模型中 key_patterns 的默认值与显式赋值。"""
+    p_default = ConnectionProfile(alias="p1", url="redis://localhost:6379/0")
+    assert p_default.key_patterns == []
+
+    p_patterns = ConnectionProfile(
+        alias="p2",
+        url="redis://localhost:6379/0",
+        key_patterns=["token:*", "user:*"],
+    )
+    assert p_patterns.key_patterns == ["token:*", "user:*"]
+
+
+def test_registry_from_file_with_key_patterns(tmp_path: pytest.TempPathFactory) -> None:
+    """验证从配置文件中解析 key_patterns 列表。"""
+    yaml_content = """
+default: user-cache
+
+connections:
+  user-cache:
+    url: "redis://localhost:6379/0"
+    readonly: false
+    description: "用户中心会话"
+    key_patterns:
+      - "token:*"
+      - "user:*"
+  order-cache:
+    url: "redis://localhost:6379/1"
+    readonly: true
+    description: "订单热点从库"
+    key_patterns:
+      - "order:*"
+      - "stock:*"
+"""
+    config_file = tmp_path / "patterns_connections.yaml"  # type: ignore[operator]
+    config_file.write_text(yaml_content, encoding="utf-8")
+
+    registry = ConnectionRegistry.from_file(config_file)
+    p_user = registry.get_profile("user-cache")
+    assert p_user.key_patterns == ["token:*", "user:*"]
+    p_order = registry.get_profile("order-cache")
+    assert p_order.key_patterns == ["order:*", "stock:*"]
+
+
+def test_registry_format_connection_hint_for_llm_single() -> None:
+    """验证单连接场景下生成的 LLM 连接提示精简优雅。"""
+    registry = ConnectionRegistry.from_url(
+        url="redis://localhost:6379/0",
+        alias="default",
+        description="本地默认开发库",
+        key_patterns=["*"],
+    )
+    hint = registry.format_connection_hint_for_llm()
+    assert "当前系统仅配置单连接 'default'" in hint
+    assert "本地默认开发库" in hint
+    assert "键模式: *" in hint
+
+
+def test_registry_format_connection_hint_for_llm_multi() -> None:
+    """验证多连接场景下生成的结构化 Markdown 列表提示。"""
+    registry = ConnectionRegistry(default_alias="local")
+    registry.register(
+        ConnectionProfile(
+            alias="local",
+            url="redis://localhost:6379/0",
+            readonly=False,
+            description="本地开发库",
+            key_patterns=["*"],
+        ),
+        is_default=True,
+    )
+    registry.register(
+        ConnectionProfile(
+            alias="user-cache",
+            url="redis://user:6379/0",
+            readonly=False,
+            description="用户中心",
+            key_patterns=["token:*", "user:*"],
+        )
+    )
+    registry.register(
+        ConnectionProfile(
+            alias="order-cache",
+            url="redis://order:6379/0",
+            readonly=True,
+            description="订单只读库",
+            key_patterns=["order:*"],
+        )
+    )
+
+    hint = registry.format_connection_hint_for_llm()
+    assert "当前可用连接清单：" in hint
+    assert "- 'local' [默认]: 本地开发库 (键模式: *)" in hint
+    assert "- 'user-cache': 用户中心 (键模式: token:*, user:*)" in hint
+    assert "- 'order-cache' [只读]: 订单只读库 (键模式: order:*)" in hint
+
+
+def test_registry_format_not_found_message() -> None:
+    """验证连接不存在时生成的自愈错误信息。"""
+    # 1. 单连接时提示无需切换
+    registry_single = ConnectionRegistry.from_url("redis://localhost:6379/0", alias="local")
+    msg_single = registry_single.format_not_found_message("unknown_db")
+    assert "指定的连接别名 'unknown_db' 不存在" in msg_single
+    assert "仅配置了单连接 'local'" in msg_single
+
+    # 2. 多连接时列出全部可用清单
+    registry_multi = ConnectionRegistry(default_alias="local")
+    registry_multi.register(
+        ConnectionProfile(
+            alias="local",
+            url="redis://localhost:6379/0",
+            readonly=False,
+            description="本地开发库",
+        ),
+        is_default=True,
+    )
+    registry_multi.register(
+        ConnectionProfile(
+            alias="user-cache",
+            url="redis://user:6379/0",
+            readonly=True,
+            description="用户缓存",
+            key_patterns=["user:*"],
+        )
+    )
+    msg_multi = registry_multi.format_not_found_message("wrong_db")
+    assert "指定的连接别名 'wrong_db' 不存在" in msg_multi
+    assert "当前可用的连接清单如下" in msg_multi
+    assert "- 'local' [默认]: 本地开发库" in msg_multi
+    assert "- 'user-cache' [只读]: 用户缓存 (键模式: user:*)" in msg_multi

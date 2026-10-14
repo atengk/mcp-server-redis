@@ -184,6 +184,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=None,
         help="运行时日志级别（DEBUG、INFO、WARNING、ERROR，默认读取 MCP_REDIS_LOG_LEVEL 或默认 INFO）",
     )
+    trans_group.add_argument(
+        "--server-name",
+        type=str,
+        default=None,
+        help="MCP 协议服务实例名称标识（默认读取 MCP_REDIS_SERVER_NAME 环境变量或默认 'mcp-server-redis'）",
+    )
+    trans_group.add_argument(
+        "--server-instructions",
+        type=str,
+        default=None,
+        help="向大模型注入的全局系统级业务指导指令（默认读取 MCP_REDIS_SERVER_INSTRUCTIONS 环境变量）",
+    )
 
     # 4. 运维诊断与信息
     diag_group = parser.add_argument_group("运维诊断与信息 (Diagnostics & Info)")
@@ -228,6 +240,8 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
         "port": parsed.port,
         "cluster": parsed.cluster,
         "audit_log": parsed.audit_log,
+        "server_name": parsed.server_name,
+        "server_instructions": parsed.server_instructions,
         "doctor": parsed.doctor,
         "json": parsed.json,
     }
@@ -240,6 +254,8 @@ def create_app(
     log_level: str | None = None,
     cluster: bool | None = None,
     audit_log: str | None = None,
+    server_name: str | None = None,
+    server_instructions: str | None = None,
     server_config: ServerConfig | None = None,
 ) -> FastMCP:
     """工厂函数：根据配置初始化连接注册中心、安全守卫并装配核心 4 个 MCP 工具。
@@ -252,6 +268,8 @@ def create_app(
     @param log_level 运行时日志级别（可选）
     @param cluster 是否开启 Redis Cluster 分片集群模式（可选）
     @param audit_log 命令审计日志输出目标（可选）
+    @param server_name MCP 服务实例名称标识（可选）
+    @param server_instructions 向大模型注入的全局系统级指导指令（可选）
     @param server_config 预决议完成的服务端配置对象（可选，若提供则优先采用，避免二次决议）
     @return 已经完成全部工具装配与生命周期绑定的 FastMCP 实例
     """
@@ -263,6 +281,8 @@ def create_app(
         cli_log_level=log_level,
         cli_cluster=cluster,
         cli_audit_log=audit_log,
+        cli_server_name=server_name,
+        cli_server_instructions=server_instructions,
     )
 
     # 1. 初始化连接注册中心 (ConnectionRegistry)
@@ -296,7 +316,8 @@ def create_app(
             await registry.aclose()
 
     app = FastMCP(
-        name="mcp-server-redis",
+        name=effective_config.server_name,
+        instructions=effective_config.server_instructions,
         version=SERVER_VERSION,
         lifespan=app_lifespan,
     )
@@ -335,6 +356,8 @@ def main() -> None:
         cli_port=config_dict["port"],
         cli_cluster=config_dict["cluster"],
         cli_audit_log=config_dict["audit_log"],
+        cli_server_name=config_dict.get("server_name"),
+        cli_server_instructions=config_dict.get("server_instructions"),
     )
 
     # 若指定了 --doctor 标志，运行生产环境健康自检探针并按检测结果退出

@@ -14,7 +14,7 @@ from typing import Any, Final
 import redis.exceptions
 from redis.asyncio.cluster import RedisCluster
 
-from mcp_server_redis.core.connection import ConnectionRegistry
+from mcp_server_redis.core.connection import ConnectionNotFoundError, ConnectionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,22 @@ async def redis_scan_keys(
             valid_list = ", ".join(sorted(VALID_KEY_TYPES))
             raise ValueError(f"不支持的 Redis 数据类型: '{type}'，支持的类型: {valid_list}")
 
-    client = registry.get_client(alias=connection, db=db)
+    try:
+        client = registry.get_client(alias=connection, db=db)
+    except ConnectionNotFoundError:
+        guide_msg = registry.format_not_found_message(connection or "")
+        logger.warning("redis_scan_keys 指定了不存在的 Redis 连接别名 '%s'", connection)
+        return {
+            "status": "error",
+            "error_type": "ConnectionNotFoundError",
+            "message": guide_msg,
+            "keys": [],
+            "count": 0,
+            "pattern": pattern,
+            "cursor": 0,
+            "is_truncated": False,
+        }
+
     accumulated_keys: list[str] = []
     seen_keys: set[str] = set()
 
@@ -233,7 +248,19 @@ async def redis_inspect_key(
     if not key:
         return _make_empty_inspect_result("")
 
-    client = registry.get_client(alias=connection, db=db)
+    try:
+        client = registry.get_client(alias=connection, db=db)
+    except ConnectionNotFoundError:
+        guide_msg = registry.format_not_found_message(connection or "")
+        logger.warning("redis_inspect_key 指定了不存在的 Redis 连接别名 '%s'", connection)
+        return {
+            "status": "error",
+            "error_type": "ConnectionNotFoundError",
+            "message": guide_msg,
+            "key": key,
+            "exists": False,
+        }
+
     exists = await client.exists(key)
 
     if not exists:
@@ -287,8 +314,8 @@ def register_key_tools(server: Any, registry: ConnectionRegistry) -> None:
     @param server MCP 服务端实例 (FastMCP / MCPServer)
     @param registry 连接注册中心单例
     """
+    conn_hint = registry.format_connection_hint_for_llm()
 
-    @server.tool(name="redis_scan_keys")  # type: ignore[untyped-decorator]
     async def _tool_scan_keys(
         pattern: str = "*",
         limit: int = DEFAULT_SCAN_LIMIT,
@@ -298,20 +325,6 @@ def register_key_tools(server: Any, registry: ConnectionRegistry) -> None:
         db: int | None = None,
         include_meta: bool = False,
     ) -> dict[str, Any]:
-        """使用非阻塞式聚合扫描器检索匹配的键名列表，自动处理底层游标分页。
-
-        支持传入上一页返回的 cursor 实现单机断点续翻（从 0 开始扫描）。
-        可选择传入 include_meta=True 一次性并发拉取各键的类型与 TTL 元数据，避免 N+1 往返。
-
-        Args:
-            pattern: 键名匹配模式通配符（默认 '*'）
-            limit: 最大返回条数（默认 50，硬上限 200）
-            cursor: 起始扫描游标（默认 0 从头扫描，可传入上一页返回的 cursor 实现单机断点续翻）
-            type: 目标键类型过滤（支持 string/hash/list/set/zset/stream，可选）
-            connection: 目标连接别名（可选，缺省为默认连接）
-            db: 目标数据库编号（可选，0~15）
-            include_meta: 是否在单次调用中并发附加 type 与 ttl 元数据（默认 False）
-        """
         return await redis_scan_keys(
             registry,
             pattern=pattern,
@@ -323,11 +336,34 @@ def register_key_tools(server: Any, registry: ConnectionRegistry) -> None:
             include_meta=include_meta,
         )
 
-    @server.tool(name="redis_inspect_key")  # type: ignore[untyped-decorator]
+    _tool_scan_keys.__doc__ = f"""使用非阻塞式聚合扫描器检索匹配的键名列表，自动处理底层游标分页。
+
+支持传入上一页返回的 cursor 实现单机断点续翻（从 0 开始扫描）。
+可选择传入 include_meta=True 一次性并发拉取各键的类型与 TTL 元数据，避免 N+1 往返。
+
+Args:
+    pattern: 键名匹配模式通配符（默认 '*'）
+    limit: 最大返回条数（默认 50，硬上限 200）
+    cursor: 起始扫描游标（默认 0 从头扫描，可传入上一页返回的 cursor 实现单机断点续翻）
+    type: 目标键类型过滤（支持 string/hash/list/set/zset/stream，可选）
+    connection: {conn_hint}
+    db: 目标数据库编号（可选，0~15）
+    include_meta: 是否在单次调用中并发附加 type 与 ttl 元数据（默认 False）
+"""
+    server.tool(name="redis_scan_keys")(_tool_scan_keys)
+
     async def _tool_inspect_key(
         key: str,
         connection: str | None = None,
         db: int | None = None,
     ) -> dict[str, Any]:
-        """单键多维诊断工具：聚合获取类型、TTL、内存占用与编码结构。"""
         return await redis_inspect_key(registry, key=key, connection=connection, db=db)
+
+    _tool_inspect_key.__doc__ = f"""单键多维诊断工具：聚合获取类型、TTL、内存占用与编码结构。
+
+Args:
+    key: 待诊断的目标键名
+    connection: {conn_hint}
+    db: 目标数据库编号（可选，0~15）
+"""
+    server.tool(name="redis_inspect_key")(_tool_inspect_key)

@@ -6,12 +6,13 @@
 """
 
 from collections.abc import AsyncIterator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from mcp_server_redis.core.connection import ConnectionProfile, ConnectionRegistry
 from mcp_server_redis.tools.keys import (
+    redis_inspect_key,
     redis_key_inspect,
     redis_scan_keys,
     register_key_tools,
@@ -362,3 +363,58 @@ async def test_redis_scan_keys_cluster_with_cursor_warning(
         assert res["count"] == 2
         assert "message" in res
         assert "Redis Cluster 分片集群采用全局节点迭代" in res["message"]
+
+
+@pytest.mark.asyncio
+async def test_redis_scan_keys_connection_not_found_envelope(
+    sample_registry: ConnectionRegistry,
+) -> None:
+    """验证 redis_scan_keys 传入未知连接别名时返回标准化自愈错误信封。"""
+    res = await redis_scan_keys(sample_registry, connection="invalid_alias")
+    assert res["status"] == "error"
+    assert res["error_type"] == "ConnectionNotFoundError"
+    assert "指定的连接别名 'invalid_alias' 不存在" in res["message"]
+    assert res["keys"] == []
+
+
+@pytest.mark.asyncio
+async def test_redis_inspect_key_connection_not_found_envelope(
+    sample_registry: ConnectionRegistry,
+) -> None:
+    """验证 redis_inspect_key 传入未知连接别名时返回标准化自愈错误信封。"""
+    res = await redis_inspect_key(sample_registry, key="mykey", connection="invalid_alias")
+    assert res["status"] == "error"
+    assert res["error_type"] == "ConnectionNotFoundError"
+    assert "指定的连接别名 'invalid_alias' 不存在" in res["message"]
+    assert res["exists"] is False
+
+
+def test_register_key_tools_docstring_hint_injection() -> None:
+    """验证向 FastMCP 注册键检索诊断工具时动态注入连接提示。"""
+    mock_server = MagicMock()
+    mock_decorator = MagicMock()
+    mock_server.tool.return_value = mock_decorator
+
+    reg = ConnectionRegistry(default_alias="local")
+    from mcp_server_redis.core.connection import ConnectionProfile
+
+    reg.register(
+        ConnectionProfile(
+            alias="local",
+            url="redis://localhost:6379/0",
+            readonly=False,
+            description="本地测试库",
+            key_patterns=["test:*"],
+        ),
+        is_default=True,
+    )
+    from mcp_server_redis.tools.keys import register_key_tools
+
+    register_key_tools(mock_server, reg)
+    assert mock_server.tool.call_count == 2
+    assert mock_decorator.call_count == 2
+    scan_fn = mock_decorator.call_args_list[0][0][0]
+    inspect_fn = mock_decorator.call_args_list[1][0][0]
+    assert "connection: 目标连接别名" in scan_fn.__doc__
+    assert "本地测试库" in scan_fn.__doc__
+    assert "connection: 目标连接别名" in inspect_fn.__doc__

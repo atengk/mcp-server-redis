@@ -31,6 +31,7 @@ async def redis_list_connections(registry: ConnectionRegistry) -> dict[str, Any]
                 "db": profile.db,
                 "readonly": profile.readonly,
                 "description": profile.description,
+                "key_patterns": profile.key_patterns,
                 "is_default": (profile.alias == registry.default_alias),
             }
         )
