@@ -31,7 +31,7 @@ _避免使用_: 单一授权 (Single Auth)、强制覆盖 (Force Override)
 _避免使用_: 过滤器 (Filter)、安全拦截器 (Interceptor)、检查器 (Checker)
 
 **命令网关 (Command Gateway)**:
-接收客户端原生 Redis 命令字符串，负责安全分词、前置门禁裁决并在目标实例上无状态执行的核心协议入口 (`redis_command`)。  
+接收客户端原生 Redis 命令字符串，负责安全分词、前置门禁裁决并在目标实例上无状态执行的核心协议入口 (`redis_execute_command`)。  
 _避免使用_: 命令代理 (Command Proxy)、命令管道 (Command Pipeline)
 
 **命令分类裁决器 (Command Classifier)**:

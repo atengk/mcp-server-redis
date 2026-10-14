@@ -36,6 +36,14 @@ services:
       - MCP_REDIS_TRANSPORT=sse
       - MCP_REDIS_SERVER_HOST=0.0.0.0
       - MCP_REDIS_SERVER_PORT=8000
+
+      # 跨服务身份标识与大模型指导指令 (可选)
+      # - MCP_REDIS_SERVER_NAME=${MCP_REDIS_SERVER_NAME:-mcp-server-redis}
+      # - MCP_REDIS_SERVER_INSTRUCTIONS=${MCP_REDIS_SERVER_INSTRUCTIONS:-}
+
+      # 审计日志输出与 BigKey 内存防爆阈值 (可选)
+      # - MCP_REDIS_AUDIT_LOG=/var/log/redis_audit.jsonl
+      # - MCP_REDIS_MAX_UNBOUNDED_READ_ITEMS=2000
     extra_hosts:
       # 跨平台宿主机网络互通 (支持 Linux/macOS/Windows)
       - "host.docker.internal:host-gateway"

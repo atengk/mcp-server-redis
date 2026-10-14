@@ -299,9 +299,9 @@ redis_inspect_key(key="user:profile:1001")
 
 ---
 
-## 🌐 MCP 只读资源与排障提示词矩阵 (Resources & Prompts)
+## 💬 生产排障与日常高频实用提示词 (Everyday Prompts & SOPs)
 
-除了 4 个核心工具，服务还完整实现了 MCP 规范的 Resources 与 Prompts 原语：
+除了 4 个核心工具，服务还完整实现了 MCP 规范的 Resources 与 Prompts 原语，并针对大模型日常运维交互场景总结了开箱即用的高频实用提示词模版。
 
 ### 1. 只读系统快照资源 (Resources)
 现代 MCP 客户端（如 Claude Desktop 或 Cursor）可在不产生工具调用的前提下直接注入只读上下文：
@@ -309,12 +309,53 @@ redis_inspect_key(key="user:profile:1001")
 - `redis://{connection}/slowlog` / `redis://slowlog`：指定连接或默认连接的最新 10 条慢查询日志切片；
 - `redis://{connection}/clients` / `redis://clients`：指定连接或默认连接的活跃客户端连接列表（IP 末段自动脱敏，防止内网拓扑泄露）。
 
-### 2. 生产级运维诊断提示词 (Prompts)
-为大模型提供标准化运维 SOP 模板：
-- **`redis_diagnose_memory`**：指引模型按“基线核对 -> 碎片率分析 -> 复合键采样 -> 单键诊断 -> 调优报告”闭环排查内存瓶颈；
-- **`redis_analyze_slowlog`**：指引模型按“拉取慢查 -> 命令归类 -> O(N) 及单线程阻塞根因定级 -> 调优建议”分析高耗时指令；
-- **`redis_troubleshoot_bigkeys`**：指引模型按“全库采样 -> O(1) 基数探查 -> 单键内存与编码诊断 -> 分页渐进式切片替代 -> 异步 UNLINK 安全清理”排查治理巨型键。
+### 2. MCP 内置标准诊断 SOP 提示词 (Built-in Prompts)
+在支持 MCP Prompts 的客户端（如 Claude Desktop、Cursor、Cherry Studio）中，输入 `/` 即可一键挂载以下标准化生产级运维排查 SOP：
 
+| 内置 Prompt 名称 | 核心参数 | 排查诊断 SOP 工作流 |
+| :--- | :--- | :--- |
+| **`redis_diagnose_memory`** | `connection: str = "default"` | **内存瓶颈排查 SOP**：指引模型按「基线指标核对（`used_memory` / `mem_fragmentation_ratio`） ➔ 碎片率与 Swap 风险分析 ➔ 复合键采样（`include_meta=True` 规避 N+1） ➔ 单键精细诊断（`MEMORY USAGE` / `encoding`） ➔ 调优报告输出」闭环排查内存问题。 |
+| **`redis_analyze_slowlog`** | `connection: str = "default"` | **慢查询优化分析 SOP**：指引模型按「拉取慢查（读取 `/slowlog` 资源或 `SLOWLOG GET 10`） ➔ 命令耗时与频次归类 ➔ O(N) 复杂指令与单线程阻塞根因定级 ➔ 分页切片与异步化建议」系统优化高耗时指令。 |
+| **`redis_troubleshoot_bigkeys`** | `connection: str = "default"` | **BigKey 治理排障 SOP**：指引模型按「渐进式键采样（非阻塞 SCAN 替代 KEYS） ➔ 轻量 O(1) 基数探查（`HLEN`/`SCARD`/`LLEN`/`ZCARD`，严禁无界全量拉取） ➔ 单键内存与编码诊断 ➔ 渐进式分页切片替代 ➔ 异步 `UNLINK` 安全清理」系统治理巨型键。 |
+
+### 3. 日常对话高频实用提示词模版 (Everyday Routine Prompts)
+
+在日常与挂载了本 MCP 服务的 AI Agent 对话时，可直接复制并根据实际业务调整以下 6 大高频提示词：
+
+#### 场景 1：日常键空间探查与数据检视
+> **提示词**：  
+> “请帮我检索当前 Redis 中所有以 `user:*` 为前缀的键，列出它们的数据类型、TTL 过期时间以及内存大小。注意：请使用非阻塞的聚合扫描工具，严禁使用阻塞式的 KEYS 命令。”
+
+#### 场景 2：实例健康状态与内存碎片率巡检
+> **提示词**：  
+> “请对当前 Redis 实例进行一次全面的健康体检：  
+> 1. 读取系统 INFO 信息，汇总已用内存（used_memory_human）、内存峰值和内存碎片率（mem_fragmentation_ratio）；  
+> 2. 分析当前碎片率是否正常，评估是否存在内存严重碎片化或物理内存换页（Swap）风险；  
+> 3. 查看连接的客户端数量并给出健康评估结论与调优建议。”
+
+#### 场景 3：慢查询定位与性能优化建议
+> **提示词**：  
+> “请帮我抓取当前 Redis 最近的 10 条慢查询日志（Slowlog），分析耗时最长的是哪些命令、涉及的键名与耗时微秒数。针对耗时较高的操作，请指出其根本原因（如是否存在全量扫描、未切片读取或跨槽执行），并给出具体的优化替换方案。”
+
+#### 场景 4：BigKey 安全探查与渐进式切片治理
+> **提示词**：  
+> “请帮我排查当前数据库中是否存在占用过大的 BigKey：  
+> 1. 先通过扫描获取候选键集合；  
+> 2. 针对集合类型键，先调用轻量 O(1) 指令（如 HLEN、LLEN、SCARD、ZCARD）检查其元素规模，严禁直接执行 HGETALL 或全量 SMEMBERS；  
+> 3. 针对疑似大键诊断其 memory_usage 与底层 encoding 编码；  
+> 4. 若集合元素超过 1000 项，请给出使用 HSCAN/SSCAN 渐进式分页切片读取的方案。”
+
+#### 场景 5：多实例定向检索与数据比对
+> **提示词**：  
+> “我们配置了多套 Redis 实例。请帮我查询：  
+> 1. 在 `user-cache` 实例中查找键 `session:token:1001` 的数据内容与剩余 TTL；  
+> 2. 在 `order-cache` 实例中查找以 `order:1001:*` 开头的最新订单键；  
+> 3. 比对两个实例中用户 ID 关联数据的状态是否一致。”
+
+#### 场景 6：安全删除二次确认闭环
+> **提示词**：  
+> “请帮我清理过期的临时导出缓存键，前缀为 `temp:export:202610*`。  
+> 核心安全要求：请先调用命令获取待删除的键清单与影响总数（此时不要加 confirm=True），向我列出确认清单；等我仔细核对并回复‘确认执行’后，你再显式传入 confirm=True 执行物理清理。”
 
 ---
 
@@ -567,7 +608,7 @@ uvx atengk-mcp-server-redis --url "redis://10.0.0.1:6379" --cluster --allow-writ
 - 🛡️ **单一数据库 (DB 0) 强制防御契约**：
   Redis Cluster 规范物理移除了多逻辑库概念，仅支持 0 号库。当调用工具时误传 `db=1~15` 或 URL 中含有 `/<db>` 路径，服务底层自动执行**深度防御**：物理剥除 URL 中的路径，自动记录审计告警并重置绑定至 `db=0`，绝不因切库异常抛出 `ResponseError: SELECT is not allowed in cluster mode` 导致会话中断。
 - 🛡️ **跨槽 (Cross-Slot) 异常优雅降级**：
-  在分片集群中执行多键命令（如 `MGET`、`DEL` 多个跨槽键）若触发 `CROSSSLOT Keys in request don't hash to the same slot` 异常，`redis_command` 自动捕获并输出结构化错误引导，明确提示大模型按单键分别执行。
+  在分片集群中执行多键命令（如 `MGET`、`DEL` 多个跨槽键）若触发 `CROSSSLOT Keys in request don't hash to the same slot` 异常，`redis_execute_command` 自动捕获并输出结构化错误引导，明确提示大模型按单键分别执行。
 - 🔍 **全节点聚合扫描 (`redis_scan_keys`)**：
   集群模式自适应切换至 `client.scan_iter` 机制，自动轮询遍历全部分片 Master 节点并聚合匹配键集合，受条数上限（默认 50，硬上限 200）安全截断保护。
 
@@ -605,6 +646,43 @@ uvx atengk-mcp-server-redis --url "redis://10.0.0.1:6379" --cluster --allow-writ
 # 启动 HTTP SSE 网关监听于 0.0.0.0:8000
 uvx atengk-mcp-server-redis --transport sse --host 0.0.0.0 --port 8000
 ```
+
+---
+
+## 💻 CLI 命令行参数完整参考 (CLI Arguments Reference)
+
+`atengk-mcp-server-redis` 命令行工具内置标准 POSIX 规范的参数解析器，通过 `--help` 输出清晰的四大逻辑功能分组。所有关键参数均支持对应的 `MCP_REDIS_*` 环境变量映射，遵循「CLI 命令行参数 > 系统/用户级环境变量 > .env 文件 > 保底默认值」的优先级决议准则。
+
+### 1. 基础连接配置 (Connection Options)
+| 命令行参数 | 对应环境变量 | 默认值 | 作用与用法示例 |
+| :--- | :--- | :--- | :--- |
+| `--url <str>` | `MCP_REDIS_URL` | - | 单个 Redis 连接 URL，支持单机免密、带密、SSL/TLS (`rediss://`) 及集群 (`redis-cluster://`) 协议头。示例：`--url "redis://:pass@localhost:6379/0"` |
+| `--config <path>` | `MCP_REDIS_CONFIG` | - | 多实例连接配置文件路径，支持 YAML 与 JSON 格式。示例：`--config ./connections.yaml` |
+| `--cluster` | `MCP_REDIS_CLUSTER` | `false` | 强制激活 Redis Cluster 分片集群连接模式，启用单库 (db=0) 防御与跨槽并发防御 |
+
+### 2. 安全与权限控制 (Security & Permissions)
+| 命令行参数 | 对应环境变量 | 默认值 | 作用与用法示例 |
+| :--- | :--- | :--- | :--- |
+| `--allow-write` | `MCP_REDIS_ALLOW_WRITE` | `false` | 显式开启数据写权限。默认全局强只读，写操作受启动参数与连接 `readonly: false` 双重门禁管控 |
+| `--audit-log <target>` | `MCP_REDIS_AUDIT_LOG` | - | 结构化命令审计日志输出目标，支持 `'stderr'`、`'stdout'` 或具体文件路径（在 stdio 传输模式下自动重定向至 stderr 防协议污染） |
+
+### 3. 服务与网络传输 (Transport & Server)
+| 命令行参数 | 对应环境变量 | 默认值 | 作用与用法示例 |
+| :--- | :--- | :--- | :--- |
+| `--transport <stdio\|sse>` | `MCP_REDIS_TRANSPORT` | `stdio` | 传输协议模式。`stdio` 适合本地客户端（Claude Desktop/Cursor），`sse` 适合微服务与远程 Web AI 网关 |
+| `--host <ip>` | `MCP_REDIS_SERVER_HOST` | `0.0.0.0` | HTTP SSE 模式服务端监听绑定的主机 IP 地址 |
+| `--port <port>` | `MCP_REDIS_SERVER_PORT` | `8000` | HTTP SSE 模式服务端监听绑定的 HTTP 端口号 |
+| `--log-level <level>` | `MCP_REDIS_LOG_LEVEL` | `INFO` | 运行时日志级别，可选 `DEBUG`、`INFO`、`WARNING`、`ERROR`（日志一律输出至 stderr 杜绝污染） |
+| `--server-name <name>` | `MCP_REDIS_SERVER_NAME` | `mcp-server-redis` | MCP 协议握手层声明的服务实例名称，供宿主客户端区分多 MCP 服务实例（底层工具名保持物理稳定不变） |
+| `--server-instructions <text>` | `MCP_REDIS_SERVER_INSTRUCTIONS` | 内置指导 | 向大模型注入的全局系统级业务指导与拓扑边界说明 |
+
+### 4. 运维诊断与信息 (Diagnostics & Info)
+| 命令行参数 | 对应环境变量 | 默认值 | 作用与用法示例 |
+| :--- | :--- | :--- | :--- |
+| `--doctor` | - | `false` | 执行生产环境连通性、配置语义与隔离写权限四维健康自检探针并退出（零生产污染，成功返回 0，失败返回 1） |
+| `--json` | - | `false` | 配合 `--doctor` 参数时以结构化 JSON 格式输出自检报告，便于 CI/CD 流水线与自动化测试脚本解析 |
+| `-v`, `--version` | - | - | 输出详细服务版本号与底层运行时环境指纹（Python / OS / mcp / redis-py / pydantic / pyyaml）并退出 |
+| `-h`, `--help` | - | - | 显示按四大逻辑分组归类的命令行帮助信息与典型场景使用示例 |
 
 ---
 
