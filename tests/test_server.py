@@ -82,10 +82,10 @@ async def test_create_app_mounts_resources_and_prompts() -> None:
 
 
 def test_create_app_sets_server_version() -> None:
-    """验证 create_app 正确配置服务协议版本号为 2.0.0。"""
+    """验证 create_app 正确配置服务协议版本号为 2.1.0。"""
     app = create_app(url="redis://localhost:6379/0")
     assert app.version == SERVER_VERSION
-    assert SERVER_VERSION == "2.0.0"
+    assert SERVER_VERSION == "2.1.0"
 
 
 @pytest.mark.asyncio

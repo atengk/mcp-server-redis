@@ -34,6 +34,7 @@
 | [ADR-0013](./0013-production-observability-bigkey-defense-and-healthz.md) | 连接池超时基线、结构化审计日志、BigKey 内存防爆与云原生探活 | 已采纳 | 2026-10-14 |
 | [ADR-0014](./0014-cli-diagnostics-doctor-and-version.md) | CLI 运维增强套件（--help 逻辑分组、--version 环境指纹与 --doctor 全景自检） | 已采纳 | 2026-10-14 |
 | [ADR-0015](./0015-multi-connection-llm-routing-and-server-identification.md) | 多数据库场景下的大模型感知路由与跨服务身份标识体系 | 已采纳 | 2026-10-14 |
+| [ADR-0016](./0016-apache-license-and-oss-template-integration.md) | 升级 Apache-2.0 开源协议与集成 oss-template 现代化工程套件 | 已采纳 | 2026-10-14 |
 
 
 

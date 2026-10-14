@@ -11,7 +11,7 @@
     <img src="https://img.shields.io/pypi/v/atengk-mcp-server-redis?style=flat-square" alt="PyPI Version" />
   </a>
   <a href="./LICENSE">
-    <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License" />
+    <img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat-square" alt="License" />
   </a>
   <a href="./CONTRIBUTING.md">
     <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome" />
@@ -859,12 +859,13 @@ uvx atengk-mcp-server-redis --config ./connections.yaml --allow-write
 
 我们欢迎社区贡献！如果您发现了缺陷或有功能建议：
 
-1. 提交 [GitHub Issues](https://github.com/atengk/mcp-server-redis/issues)；
-2. 查阅 [贡献指南](./CONTRIBUTING.md) 与 [智能体工程规范](./AGENTS.md)；
-3. 发起 Pull Request。
+1. 提交 [GitHub Issues](https://github.com/atengk/mcp-server-redis/issues) 与查阅 [行为准则](./CODE_OF_CONDUCT.md)；
+2. 查阅 [贡献指南](./CONTRIBUTING.md)、[安全政策](./SECURITY.md) 与 [智能体工程规范](./AGENTS.md)；
+3. 克隆代码后在本地终端执行 `git config core.hooksPath .githooks` 激活提交守护；
+4. 发起 Pull Request。
 
 ---
 
 ## 📄 开源许可证
 
-本项目基于 [MIT 许可证](./LICENSE) 开源。
+本项目基于 [Apache License 2.0](./LICENSE) 协议开源。

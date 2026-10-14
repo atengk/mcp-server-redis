@@ -23,7 +23,7 @@ from starlette.responses import JSONResponse
 FastMCP = MCPServer
 
 # 服务端版本号常量
-SERVER_VERSION: Final[str] = "2.0.0"
+SERVER_VERSION: Final[str] = "2.1.0"
 
 from mcp_server_redis.core.audit import AuditLogger
 from mcp_server_redis.core.connection import ConnectionRegistry

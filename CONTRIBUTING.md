@@ -52,11 +52,19 @@
    uv run pytest                 # 单元与集成测试套件
    ```
 
+4. **激活本地 Git 规范提交守护钩子**：
+   ```bash
+   git config core.hooksPath .githooks
+   ```
+   *说明：项目内置了零依赖的原生 `.githooks/commit-msg` 脚本，在本地执行 `git commit` 时自动校验首行格式，违规时拦截并给出指引。*
+
 ---
 
 ## 3. Commit 提交信息规范
 
 本项目严格遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范，统一采用以下格式：
+
+> 💡 **交互式提交向导**：可直接运行 `bash scripts/commit.sh` 启动终端交互向导，按提示逐步录入 Type、Scope、Subject 与 Body，自动完成合规提交。
 
 ```text
 <type>(<scope>): <subject>
@@ -82,6 +90,8 @@
 
 ## 4. Pull Request 流程与门禁
 
+- **行为准则与合规**：所有参与社区互动的开发者均须遵循 [行为准则 (CODE_OF_CONDUCT.md)](./CODE_OF_CONDUCT.md)；
+- **安全漏洞处理**：若发现安全漏洞，切勿直接提交公开 Issue，请遵循 [安全政策 (SECURITY.md)](./SECURITY.md) 通过 GitHub Advisories 私密提交；
 - **PR 标题校验**：CI 流水线包含语义化标题门禁，PR 标题必须符合 Conventional Commits 格式（如 `feat(transport): 引入 SSE 协议网关`）；
 - **自检清单**：请按模版完整填写变更背景、解决的问题、关联 Issue（如 `close #12`）并勾选自检复选框；
 - **绿灯保证**：必须保证 GitHub Actions CI 全部步骤（Ruff 质检、Mypy 检查、多版本 Pytest 矩阵）均为绿灯状态。
@@ -101,6 +111,19 @@
 
 ---
 
-## 6. 许可证
+## 6. 自动化发版机制
 
-参与贡献即代表你同意你的代码以 [MIT License](./LICENSE) 协议发布与授权。
+维护团队可通过全自动防呆脚本触发跨生态（GitHub Release + PyPI + GHCR 容器镜像）一站式流水线：
+```bash
+# 交互式向导执行发版 (自动校验状态、自增 pyproject.toml 与 server.py 版本号并打标)
+bash scripts/release.sh
+
+# 演练模式 (仅预览拟执行步骤)
+bash scripts/release.sh --dry-run
+```
+
+---
+
+## 7. 许可证
+
+参与贡献即代表你同意你的代码以 [Apache License 2.0](./LICENSE) 协议发布与授权。

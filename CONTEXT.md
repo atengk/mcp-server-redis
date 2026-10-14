@@ -197,3 +197,19 @@ _避免使用_: 键正则 (Key Regex)、路由标签 (Routing Tags)
 **自愈引导信封 (Self-Healing Envelope)**:
 当大模型传入不存在的连接别名时返回的标准化错误信封，主动反馈全量可用连接清单与业务描述，驱动大模型自我纠错并自主重试。  
 _避免使用_: 裸异常抛出 (Raw Exception Throwing)、静默降级 (Silent Fallback)
+
+**短路直通网关 (Path Fast-Pass Gate)**:
+在持续集成流水线中基于改动路径分析组件实现的非代码变更秒级快速放行机制，对于纯文档或配置更新免去耗时全量测试矩阵并直接盖戳放行。  
+_避免使用_: 跳过构建 (Skip Build)、无条件放行 (Blind Pass)
+
+**提交守门钩子 (Commit Guard Hook)**:
+在本地 Git 提报阶段运行的零依赖原生 Bash 钩子脚本，在 commit 阶段自动校验 Conventional Commits 格式规范，并在违规时拦截并输出彩色诊断与向导建议。  
+_避免使用_: 本地校验器 (Local Linter)、提交拦截器 (Commit Interceptor)
+
+**发版前置门禁 (Pre-flight Gate Test)**:
+在自动化发版与多通道分发前全盘执行的静态分析、代码格式与全量单元测试熔断机制，若测试失败立即全盘中止发版，杜绝坏包污染公共制品仓库。  
+_避免使用_: 事前检查 (Pre-check)、冒烟测试 (Smoke Test)
+
+**不可变产物校验清单 (Immutable Checksum Manifest)**:
+在制品打包编译阶段为 Wheel 与源码包计算并生成的单向 SHA-256 哈希清单文件（checksums.txt），随 GitHub Release 附件一同分发以提供防篡改验证。  
+_避免使用_: 哈希列表 (Hash List)、签名文件 (Signature File)

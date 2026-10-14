@@ -32,7 +32,7 @@
 - `redis>=5.0.0`
 - `pydantic>=2.0.0`
 - `pyyaml>=6.0`
-- 包管理与工具链：`uv`、`ruff`、`mypy`、`pytest`
+- 包管理与工程工具链：`uv`、`ruff`、`mypy`、`pytest`、`git-cliff` 与原生提交守门钩子（`.githooks/commit-msg`）
 
 ---
 
@@ -63,6 +63,9 @@
    - 底层所有核心 MCP 工具名称（`redis_execute_command` 等）始终保持严格的物理稳定性，绝不随意添加前缀或动态篡改。
 10. **全景环境体检与隔离写探针 (Doctor Diagnostic Runner)**：
     - `--doctor` 独立运行于协议之外；写权限探针必须使用纳秒级 UUID 隔离键（`__mcp_doctor_probe_{uuid}__`）、5 秒 TTL 与即时物理清理机制，严禁污染生产数据。
+11. **规范提交守护与开源协议不变量 (Commit Guard & Apache-2.0 License)**：
+    - 开发者与 AI Agent 本地提交均受 `.githooks/commit-msg` 守门约束，必须严格遵循 Conventional Commits 语义化规范；
+    - 项目整体遵循 Apache License 2.0 协议，享有显式专利授权与专利反诉防御，严禁将专有闭源或冲突许可证代码混入本代码库。
 
 ---
 
