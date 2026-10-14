@@ -50,6 +50,10 @@ USER appuser
 # 暴露 HTTP SSE 网关默认监听端口
 EXPOSE 8000
 
+# 容器云原生健康检查探针（基于 Python 标准库 urllib 探查 /healthz，零额外工具依赖）
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)" || exit 1
+
 # 默认服务入口：支持通过 CLI 参数直接追加覆盖
 ENTRYPOINT ["atengk-mcp-server-redis"]
 

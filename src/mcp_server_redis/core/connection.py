@@ -21,6 +21,7 @@ from redis.asyncio.cluster import RedisCluster
 
 from mcp_server_redis.core.env import (
     resolve_connect_timeout_from_env,
+    resolve_max_connections_from_env,
     resolve_socket_timeout_from_env,
 )
 
@@ -103,8 +104,9 @@ class ConnectionProfile(BaseModel):
     description: str = ""
     db: int = Field(default=0, ge=0, le=15)
     is_cluster: bool = False
-    socket_connect_timeout: float = 3.0
-    socket_timeout: float = 5.0
+    max_connections: int = 50
+    socket_connect_timeout: float = 5.0
+    socket_timeout: float = 10.0
 
     @model_validator(mode="before")
     @classmethod
@@ -124,6 +126,8 @@ class ConnectionProfile(BaseModel):
                 data["socket_connect_timeout"] = resolve_connect_timeout_from_env()
             if "socket_timeout" not in data or data["socket_timeout"] is None:
                 data["socket_timeout"] = resolve_socket_timeout_from_env()
+            if "max_connections" not in data or data["max_connections"] is None:
+                data["max_connections"] = resolve_max_connections_from_env()
 
             if data.get("is_cluster") or data.get("cluster"):
                 data["is_cluster"] = True
@@ -298,6 +302,7 @@ class ConnectionRegistry:
                 decode_responses=False,
                 socket_connect_timeout=profile.socket_connect_timeout,
                 socket_timeout=profile.socket_timeout,
+                max_connections=profile.max_connections,
                 cluster_error_retry_attempts=3,
                 retry_on_timeout=True,
             )
@@ -333,6 +338,7 @@ class ConnectionRegistry:
             decode_responses=False,
             socket_connect_timeout=profile.socket_connect_timeout,
             socket_timeout=profile.socket_timeout,
+            max_connections=profile.max_connections,
             health_check_interval=30,
             retry_on_timeout=True,
         )
@@ -359,6 +365,7 @@ class ConnectionRegistry:
         is_cluster: bool = False,
         socket_connect_timeout: float | None = None,
         socket_timeout: float | None = None,
+        max_connections: int | None = None,
     ) -> "ConnectionRegistry":
         """从单个 Redis URL 构造极简连接注册中心。
 
@@ -369,6 +376,7 @@ class ConnectionRegistry:
         @param is_cluster 是否开启 Redis Cluster 分片集群模式，默认 False
         @param socket_connect_timeout Socket 连接超时秒数（可选）
         @param socket_timeout Socket 指令超时秒数（可选）
+        @param max_connections 连接池最大连接数（可选，默认 50）
         @return 已装配好默认连接的注册中心实例
         """
         registry = cls(default_alias=alias)
@@ -383,6 +391,8 @@ class ConnectionRegistry:
             profile_kwargs["socket_connect_timeout"] = socket_connect_timeout
         if socket_timeout is not None:
             profile_kwargs["socket_timeout"] = socket_timeout
+        if max_connections is not None:
+            profile_kwargs["max_connections"] = max_connections
 
         profile = ConnectionProfile.model_validate(profile_kwargs)
         registry.register(profile, is_default=True)

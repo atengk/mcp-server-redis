@@ -150,6 +150,22 @@ _避免使用_: 死连接 (Dead Connection)、半开连接 (Half-Open Socket)
 在单次 MCP 工具调用中通过 Redis Pipeline 打包顺序执行多条命令并聚合返回执行信封的高性能执行通道，大幅压缩大模型多命令交互轮次。  
 _避免使用_: 多轮往返 (Multi-Roundtrip)、顺序串行调度 (Sequential Dispatch)
 
+**结构化命令审计日志 (Structured Audit Trail)**:
+在命令网关与写门禁层以单行 JSONL 格式输出的命令执行审计追溯记录，保障金融与生产级合规性，在 stdio 模式下具备严格的物理管道防污染隔离。  
+_避免使用_: 控制台打印 (Console Print)、杂乱日志 (Unstructured Log)
+
+**巨型集合防爆预检 (BigKey In-Flight Defense)**:
+针对 `HGETALL`、`SMEMBERS` 等无界全量读取命令在下发前通过 O(1) 指令探查集合大小的源头防爆机制，防止百万级 BigKey 阻塞 Redis 单线程主循环。  
+_避免使用_: 事后截断 (Post-Fetch Slicing)、内存爆破 (Memory Blowup)
+
+**云原生探活路由 (Cloud-Native Healthz Probe)**:
+在 SSE 模式下挂载的轻量 HTTP `/health` 与 `/healthz` 端点，结合底层 Redis PING 探活，精准配合 Kubernetes 的 Liveness 与 Readiness 探针切流。  
+_避免使用_: 端口盲测 (Blind Port Check)、虚拟探针 (Dummy Probe)
+
+**客户端快照脱敏 (Client List Desensitization)**:
+提取 Redis `CLIENT LIST` 时对内网客户端 IP 地址末段自动掩码并结构化展示运行状态的脱敏处理机制，防止内网拓扑嗅探。  
+_避免使用_: 裸 IP 暴露 (Raw IP Exposure)、文本原样倾泻 (Raw Text Dumping)
+
 
 
 

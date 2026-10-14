@@ -51,6 +51,7 @@ async def test_create_app_mounts_resources_and_prompts() -> None:
     prompt_names = {p.name for p in prompts}
     assert "redis_diagnose_memory" in prompt_names
     assert "redis_analyze_slowlog" in prompt_names
+    assert "redis_troubleshoot_bigkeys" in prompt_names
 
     p_mem = await app.get_prompt("redis_diagnose_memory", arguments={"connection": "prod"})
     assert isinstance(p_mem, GetPromptResult)
@@ -59,16 +60,25 @@ async def test_create_app_mounts_resources_and_prompts() -> None:
     assert "prod" in first_msg.text
     assert "INFO memory" in first_msg.text
 
+    p_big = await app.get_prompt("redis_troubleshoot_bigkeys", arguments={"connection": "test"})
+    assert isinstance(p_big, GetPromptResult)
+    big_msg = p_big.messages[0].content
+    assert isinstance(big_msg, TextContent)
+    assert "test" in big_msg.text
+    assert "UNLINK" in big_msg.text
+
     # 2. 验证 Resources 与 Resource Templates 挂载
     resources = await app.list_resources()
     resource_uris = {str(r.uri) for r in resources}
     assert "redis://info" in resource_uris
     assert "redis://slowlog" in resource_uris
+    assert "redis://clients" in resource_uris
 
     templates = await app.list_resource_templates()
     template_uris = {t.uri_template for t in templates}
     assert "redis://{connection}/info" in template_uris
     assert "redis://{connection}/slowlog" in template_uris
+    assert "redis://{connection}/clients" in template_uris
 
 
 def test_create_app_sets_server_version() -> None:
@@ -109,6 +119,7 @@ def test_build_argument_parser_defaults() -> None:
     assert args.host is None
     assert args.port is None
     assert args.cluster is False
+    assert args.audit_log is None
 
 
 def test_parse_cli_arguments_custom_values() -> None:
@@ -127,6 +138,8 @@ def test_parse_cli_arguments_custom_values() -> None:
             "--port",
             "8888",
             "--cluster",
+            "--audit-log",
+            "stderr",
         ]
     )
 
@@ -138,6 +151,7 @@ def test_parse_cli_arguments_custom_values() -> None:
     assert config_dict["host"] == "127.0.0.1"
     assert config_dict["port"] == 8888
     assert config_dict["cluster"] is True
+    assert config_dict["audit_log"] == "stderr"
 
 
 def test_parse_cli_arguments_with_config_file(tmp_path: Path) -> None:
@@ -238,3 +252,46 @@ async def test_create_app_cluster_flag_propagation() -> None:
         registry = ctx["registry"]
         profile = registry.get_profile()
         assert profile.is_cluster is True
+
+
+@pytest.mark.asyncio
+async def test_health_and_healthz_routes() -> None:
+    """验证 SSE 模式下挂载的 /health 与 /healthz 端点结合 Redis PING 探活。"""
+    import json
+
+    app = create_app(url="redis://localhost:6379/0")
+    sse = app.sse_app()
+
+    from starlette.routing import Route
+
+    endpoints = {r.path: r.endpoint for r in sse.routes if isinstance(r, Route)}
+    assert "/health" in endpoints
+    assert "/healthz" in endpoints
+
+    # 1. 模拟 Redis PING 探活成功
+    mock_client = AsyncMock()
+    mock_client.ping = AsyncMock(return_value="PONG")
+    with patch(
+        "mcp_server_redis.core.connection.ConnectionRegistry.get_client",
+        return_value=mock_client,
+    ):
+        res = await endpoints["/healthz"](None)
+        assert res.status_code == 200
+        body = json.loads(res.body)
+        assert body["status"] == "healthy"
+        assert body["redis"] == "ok"
+        assert body["version"] == SERVER_VERSION
+
+    # 2. 模拟 Redis PING 探活失败
+    mock_failing_client = AsyncMock()
+    mock_failing_client.ping = AsyncMock(side_effect=OSError("Connection refused"))
+    with patch(
+        "mcp_server_redis.core.connection.ConnectionRegistry.get_client",
+        return_value=mock_failing_client,
+    ):
+        res_fail = await endpoints["/healthz"](None)
+        assert res_fail.status_code == 503
+        body_fail = json.loads(res_fail.body)
+        assert body_fail["status"] == "unhealthy"
+        assert body_fail["redis"] == "error"
+        assert "Connection refused" in body_fail["error"]

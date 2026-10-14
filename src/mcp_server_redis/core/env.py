@@ -36,9 +36,13 @@ _DEFAULT_SERVER_HOST: Final[str] = "0.0.0.0"
 # 默认服务监听端口保底值
 _DEFAULT_SERVER_PORT: Final[int] = 8000
 # 默认 Socket 连接超时保底值（秒）
-_DEFAULT_CONNECT_TIMEOUT: Final[float] = 3.0
+_DEFAULT_CONNECT_TIMEOUT: Final[float] = 5.0
 # 默认 Socket 指令执行超时保底值（秒）
-_DEFAULT_SOCKET_TIMEOUT: Final[float] = 5.0
+_DEFAULT_SOCKET_TIMEOUT: Final[float] = 10.0
+# 默认单个连接池最大连接数保底值
+_DEFAULT_MAX_CONNECTIONS: Final[int] = 50
+# 默认高危无界全量读取最大安全阈值（项数）
+_DEFAULT_MAX_UNBOUNDED_READ_ITEMS: Final[int] = 2000
 
 
 def load_dotenv_if_exists(dotenv_path: Path | str | None = None) -> bool:
@@ -292,11 +296,11 @@ def resolve_server_port_from_env() -> int:
 def resolve_connect_timeout_from_env() -> float:
     """从环境变量解析 Redis Socket 连接超时时间（秒）。
 
-    读取 `MCP_REDIS_CONNECT_TIMEOUT` 环境变量，非法或缺失时返回 3.0。
+    优先读取 `MCP_REDIS_SOCKET_CONNECT_TIMEOUT` 或 `MCP_REDIS_CONNECT_TIMEOUT`，非法或缺失时返回 5.0。
 
     @return 连接超时秒数
     """
-    val = os.getenv("MCP_REDIS_CONNECT_TIMEOUT")
+    val = os.getenv("MCP_REDIS_SOCKET_CONNECT_TIMEOUT") or os.getenv("MCP_REDIS_CONNECT_TIMEOUT")
     if not val:
         return _DEFAULT_CONNECT_TIMEOUT
     try:
@@ -304,7 +308,7 @@ def resolve_connect_timeout_from_env() -> float:
         return parsed if parsed > 0 else _DEFAULT_CONNECT_TIMEOUT
     except ValueError:
         logger.warning(
-            "环境变量 MCP_REDIS_CONNECT_TIMEOUT 格式非法 ('%s')，降级为默认值 %.1f",
+            "环境变量 MCP_REDIS_SOCKET_CONNECT_TIMEOUT 格式非法 ('%s')，降级为默认值 %.1f",
             val,
             _DEFAULT_CONNECT_TIMEOUT,
         )
@@ -314,7 +318,7 @@ def resolve_connect_timeout_from_env() -> float:
 def resolve_socket_timeout_from_env() -> float:
     """从环境变量解析 Redis Socket 指令超时时间（秒）。
 
-    优先读取 `MCP_REDIS_SOCKET_TIMEOUT` 或 `MCP_REDIS_TIMEOUT` 环境变量，非法或缺失时返回 5.0。
+    优先读取 `MCP_REDIS_SOCKET_TIMEOUT` 或 `MCP_REDIS_TIMEOUT` 环境变量，非法或缺失时返回 10.0。
 
     @return 指令超时秒数
     """
@@ -333,6 +337,61 @@ def resolve_socket_timeout_from_env() -> float:
         return _DEFAULT_SOCKET_TIMEOUT
 
 
+def resolve_max_connections_from_env() -> int:
+    """从环境变量解析单个连接池最大连接数。
+
+    读取 `MCP_REDIS_MAX_CONNECTIONS` 环境变量，非法或缺失时返回 50。
+
+    @return 最大连接数整数值
+    """
+    val = os.getenv("MCP_REDIS_MAX_CONNECTIONS")
+    if not val:
+        return _DEFAULT_MAX_CONNECTIONS
+    try:
+        parsed = int(val.strip())
+        return parsed if parsed > 0 else _DEFAULT_MAX_CONNECTIONS
+    except ValueError:
+        logger.warning(
+            "环境变量 MCP_REDIS_MAX_CONNECTIONS 格式非法 ('%s')，降级为默认值 %d",
+            val,
+            _DEFAULT_MAX_CONNECTIONS,
+        )
+        return _DEFAULT_MAX_CONNECTIONS
+
+
+def resolve_audit_log_from_env() -> str | None:
+    """从环境变量解析命令审计日志输出路径或目标。
+
+    读取 `MCP_REDIS_AUDIT_LOG` 环境变量。
+
+    @return 审计输出目标字符串（如 "stderr", "stdout", 文件路径），未配置返回 None
+    """
+    val = os.getenv("MCP_REDIS_AUDIT_LOG")
+    return val.strip() if val else None
+
+
+def resolve_max_unbounded_read_items_from_env() -> int:
+    """从环境变量解析高危无界读取命令的防爆拦截阈值。
+
+    读取 `MCP_REDIS_MAX_UNBOUNDED_READ_ITEMS` 环境变量，非法或缺失时返回 2000。
+
+    @return 阈值项数
+    """
+    val = os.getenv("MCP_REDIS_MAX_UNBOUNDED_READ_ITEMS")
+    if not val:
+        return _DEFAULT_MAX_UNBOUNDED_READ_ITEMS
+    try:
+        parsed = int(val.strip())
+        return parsed if parsed > 0 else _DEFAULT_MAX_UNBOUNDED_READ_ITEMS
+    except ValueError:
+        logger.warning(
+            "环境变量 MCP_REDIS_MAX_UNBOUNDED_READ_ITEMS 格式非法 ('%s')，降级为默认值 %d",
+            val,
+            _DEFAULT_MAX_UNBOUNDED_READ_ITEMS,
+        )
+        return _DEFAULT_MAX_UNBOUNDED_READ_ITEMS
+
+
 class ServerConfig(NamedTuple):
     """服务端运行时生效配置对象。
 
@@ -348,6 +407,11 @@ class ServerConfig(NamedTuple):
     @property host SSE 监听地址（默认 "0.0.0.0"）
     @property port SSE 监听端口（默认 8000）
     @property is_cluster 是否开启 Redis Cluster 集群模式（默认 False）
+    @property max_connections 单连接池最大连接数（默认 50）
+    @property socket_connect_timeout 连接超时秒数（默认 5.0）
+    @property socket_timeout 指令超时秒数（默认 10.0）
+    @property audit_log 审计日志输出路径或目标（默认 None）
+    @property max_unbounded_read_items 高危无界读取最大安全阈值（默认 2000）
     """
 
     url: str
@@ -358,6 +422,11 @@ class ServerConfig(NamedTuple):
     host: str = _DEFAULT_SERVER_HOST
     port: int = _DEFAULT_SERVER_PORT
     is_cluster: bool = False
+    max_connections: int = _DEFAULT_MAX_CONNECTIONS
+    socket_connect_timeout: float = _DEFAULT_CONNECT_TIMEOUT
+    socket_timeout: float = _DEFAULT_SOCKET_TIMEOUT
+    audit_log: str | None = None
+    max_unbounded_read_items: int = _DEFAULT_MAX_UNBOUNDED_READ_ITEMS
 
 
 def resolve_server_configuration(
@@ -369,6 +438,11 @@ def resolve_server_configuration(
     cli_host: str | None = None,
     cli_port: int | None = None,
     cli_cluster: bool | None = None,
+    cli_audit_log: str | None = None,
+    cli_max_connections: int | None = None,
+    cli_socket_connect_timeout: float | None = None,
+    cli_socket_timeout: float | None = None,
+    cli_max_unbounded_read_items: int | None = None,
 ) -> ServerConfig:
     """统一决议服务端最终启动配置参数。
 
@@ -383,7 +457,12 @@ def resolve_server_configuration(
     @param cli_host CLI 命令行传入的 --host（可选）
     @param cli_port CLI 命令行传入的 --port（可选）
     @param cli_cluster CLI 命令行传入的 --cluster 开关（可选）
-    @return ServerConfig 命名元组 (url, config, allow_write, log_level, transport, host, port, is_cluster)
+    @param cli_audit_log CLI 命令行传入的 --audit-log 参数（可选）
+    @param cli_max_connections CLI 传入的最大连接数（可选）
+    @param cli_socket_connect_timeout CLI 传入的连接超时（可选）
+    @param cli_socket_timeout CLI 传入的指令超时（可选）
+    @param cli_max_unbounded_read_items CLI 传入的无界读取阈值（可选）
+    @return ServerConfig 命名元组
     """
     # 1. 尝试探测并安全载入 .env 文件
     load_dotenv_if_exists()
@@ -436,6 +515,33 @@ def resolve_server_configuration(
     else:
         effective_cluster = resolve_cluster_flag_from_env()
 
+    # 10. 决议连接池规格与超时
+    effective_max_connections = (
+        cli_max_connections
+        if cli_max_connections is not None and cli_max_connections > 0
+        else resolve_max_connections_from_env()
+    )
+    effective_connect_timeout = (
+        cli_socket_connect_timeout
+        if cli_socket_connect_timeout is not None and cli_socket_connect_timeout > 0
+        else resolve_connect_timeout_from_env()
+    )
+    effective_socket_timeout = (
+        cli_socket_timeout
+        if cli_socket_timeout is not None and cli_socket_timeout > 0
+        else resolve_socket_timeout_from_env()
+    )
+
+    # 11. 决议审计日志目标（CLI > 环境变量）
+    effective_audit_log = cli_audit_log or resolve_audit_log_from_env()
+
+    # 12. 决议无界全量读取最大安全阈值（CLI > 环境变量）
+    effective_max_unbounded = (
+        cli_max_unbounded_read_items
+        if cli_max_unbounded_read_items is not None and cli_max_unbounded_read_items > 0
+        else resolve_max_unbounded_read_items_from_env()
+    )
+
     return ServerConfig(
         url=effective_url,
         config=effective_config,
@@ -445,4 +551,9 @@ def resolve_server_configuration(
         host=effective_host,
         port=effective_port,
         is_cluster=effective_cluster,
+        max_connections=effective_max_connections,
+        socket_connect_timeout=effective_connect_timeout,
+        socket_timeout=effective_socket_timeout,
+        audit_log=effective_audit_log,
+        max_unbounded_read_items=effective_max_unbounded,
     )

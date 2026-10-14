@@ -8,13 +8,16 @@ FastMCP 服务主装配与 CLI 命令行协议入口。
 """
 
 import argparse
+import asyncio
 import logging
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Final
 
+import redis.exceptions
 from mcp.server import MCPServer
+from starlette.responses import JSONResponse
 
 # 兼容 FastMCP 历史类型名称
 FastMCP = MCPServer
@@ -22,6 +25,7 @@ FastMCP = MCPServer
 # 服务端版本号常量
 SERVER_VERSION: Final[str] = "2.0.0"
 
+from mcp_server_redis.core.audit import AuditLogger
 from mcp_server_redis.core.connection import ConnectionRegistry
 from mcp_server_redis.core.env import ServerConfig, resolve_server_configuration
 from mcp_server_redis.core.guard import SecurityGuard
@@ -32,6 +36,48 @@ from mcp_server_redis.tools.connections import register_connection_tools
 from mcp_server_redis.tools.keys import register_key_tools
 
 logger = logging.getLogger("mcp_server_redis")
+
+
+def setup_healthz_routes(server: FastMCP, registry: ConnectionRegistry) -> None:
+    """为 FastMCP 挂载 /health 与 /healthz 云原生健康检查 HTTP 端点。
+
+    结合底层 Redis PING 探活，正常返回 200，异常返回 503。
+
+    Args:
+        server: FastMCP 服务端实例
+        registry: 连接注册中心单例
+    """
+    original_sse_app = server.sse_app
+
+    def wrapped_sse_app(*args: Any, **kwargs: Any) -> Any:
+        starlette_app = original_sse_app(*args, **kwargs)
+
+        async def _health_endpoint(request: Any) -> Any:
+            status_code = 200
+            redis_status = "ok"
+            error_message = None
+            try:
+                client = registry.get_client()
+                await asyncio.wait_for(client.ping(), timeout=1.0)
+            except (redis.exceptions.RedisError, OSError, TimeoutError) as exc:
+                status_code = 503
+                redis_status = "error"
+                error_message = str(exc)
+
+            content: dict[str, Any] = {
+                "status": "healthy" if status_code == 200 else "unhealthy",
+                "version": SERVER_VERSION,
+                "redis": redis_status,
+            }
+            if error_message:
+                content["error"] = error_message
+            return JSONResponse(content, status_code=status_code)
+
+        starlette_app.add_route("/health", _health_endpoint, methods=["GET"])
+        starlette_app.add_route("/healthz", _health_endpoint, methods=["GET"])
+        return starlette_app
+
+    server.sse_app = wrapped_sse_app  # type: ignore[method-assign]
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -93,6 +139,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=False,
         help="激活 Redis Cluster 分片集群连接模式（默认读取 MCP_REDIS_CLUSTER 环境变量或连接配置）",
     )
+    parser.add_argument(
+        "--audit-log",
+        type=str,
+        default=None,
+        help="命令审计日志输出目标（'stderr', 'stdout' 或文件路径；默认读取 MCP_REDIS_AUDIT_LOG 环境变量）",
+    )
     return parser
 
 
@@ -100,7 +152,7 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
     """解析命令行参数或传入参数列表。
 
     @param args 可选自定义参数列表，缺省时读取 sys.argv[1:]
-    @return 包含 url, config, allow_write, log_level, transport, host, port, cluster 键的配置字典
+    @return 包含 url, config, allow_write, log_level, transport, host, port, cluster, audit_log 键的配置字典
     """
     parser = build_argument_parser()
     parsed = parser.parse_args(args)
@@ -113,6 +165,7 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
         "host": parsed.host,
         "port": parsed.port,
         "cluster": parsed.cluster,
+        "audit_log": parsed.audit_log,
     }
 
 
@@ -122,6 +175,7 @@ def create_app(
     allow_write: bool = False,
     log_level: str | None = None,
     cluster: bool | None = None,
+    audit_log: str | None = None,
     server_config: ServerConfig | None = None,
 ) -> FastMCP:
     """工厂函数：根据配置初始化连接注册中心、安全守卫并装配核心 4 个 MCP 工具。
@@ -133,6 +187,7 @@ def create_app(
     @param allow_write 是否开启写操作权限（默认 False）
     @param log_level 运行时日志级别（可选）
     @param cluster 是否开启 Redis Cluster 分片集群模式（可选）
+    @param audit_log 命令审计日志输出目标（可选）
     @param server_config 预决议完成的服务端配置对象（可选，若提供则优先采用，避免二次决议）
     @return 已经完成全部工具装配与生命周期绑定的 FastMCP 实例
     """
@@ -143,6 +198,7 @@ def create_app(
         cli_allow_write=allow_write,
         cli_log_level=log_level,
         cli_cluster=cluster,
+        cli_audit_log=audit_log,
     )
 
     # 1. 初始化连接注册中心 (ConnectionRegistry)
@@ -155,17 +211,24 @@ def create_app(
             is_cluster=effective_config.is_cluster,
         )
 
-    # 2. 初始化安全守卫 (SecurityGuard)
+    # 2. 初始化安全守卫 (SecurityGuard) 与审计跟踪器 (AuditLogger)
     guard = SecurityGuard(allow_write=effective_config.allow_write)
+    is_stdio = effective_config.transport == "stdio"
+    audit_logger = AuditLogger(target=effective_config.audit_log, is_stdio=is_stdio)
 
     # 3. 构建生命周期管理器以管理资源优雅释放
     @asynccontextmanager
     async def app_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
         logger.info("mcp-server-redis 服务正在启动...")
         try:
-            yield {"registry": registry, "guard": guard}
+            yield {
+                "registry": registry,
+                "guard": guard,
+                "audit_logger": audit_logger,
+            }
         finally:
-            logger.info("mcp-server-redis 服务正在停止，关闭所有 Redis 连接池...")
+            logger.info("mcp-server-redis 服务正在停止，关闭所有 Redis 连接池与审计跟踪器...")
+            audit_logger.close()
             await registry.aclose()
 
     app = FastMCP(
@@ -175,13 +238,22 @@ def create_app(
     )
 
     # 4. 装配挂载核心 4 个规范动宾 MCP 工具
-    register_command_tools(app, registry, guard=guard)
+    register_command_tools(
+        app,
+        registry,
+        guard=guard,
+        audit_logger=audit_logger,
+        max_unbounded_read_items=effective_config.max_unbounded_read_items,
+    )
     register_connection_tools(app, registry)
     register_key_tools(app, registry)
 
     # 5. 装配挂载 MCP 只读快照资源 (Resources) 与诊断引导提示词 (Prompts)
     register_resources(app, registry)
     register_prompts(app)
+
+    # 6. 装配挂载云原生 HTTP 探活端点 (/health 与 /healthz)
+    setup_healthz_routes(app, registry)
 
     return app
 
@@ -198,6 +270,7 @@ def main() -> None:
         cli_host=config_dict["host"],
         cli_port=config_dict["port"],
         cli_cluster=config_dict["cluster"],
+        cli_audit_log=config_dict["audit_log"],
     )
 
     # 动态设置日志级别，输出流严格绑定 sys.stderr，杜绝污染 stdout 协议流

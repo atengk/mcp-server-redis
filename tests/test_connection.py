@@ -253,8 +253,9 @@ def test_connection_profile_cluster_scheme_normalization() -> None:
     # 验证集群模式下自动物理剥除尾部 /2 路径，防范底层 RedisCluster 驱动解析报错
     assert profile2.url == "rediss://cluster.node:6380"
     assert profile2.db == 0
-    assert profile2.socket_connect_timeout == 3.0
-    assert profile2.socket_timeout == 5.0
+    assert profile2.socket_connect_timeout == 5.0
+    assert profile2.socket_timeout == 10.0
+    assert profile2.max_connections == 50
 
 
 def test_registry_from_file_with_cluster_flag(tmp_path: pytest.TempPathFactory) -> None:

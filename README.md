@@ -306,12 +306,14 @@ redis_inspect_key(key="user:profile:1001")
 ### 1. 只读系统快照资源 (Resources)
 现代 MCP 客户端（如 Claude Desktop 或 Cursor）可在不产生工具调用的前提下直接注入只读上下文：
 - `redis://{connection}/info` / `redis://info`：指定连接或默认连接的实时综合指标快照（MIME: `application/json`）；
-- `redis://{connection}/slowlog` / `redis://slowlog`：指定连接或默认连接的最新 10 条慢查询日志切片。
+- `redis://{connection}/slowlog` / `redis://slowlog`：指定连接或默认连接的最新 10 条慢查询日志切片；
+- `redis://{connection}/clients` / `redis://clients`：指定连接或默认连接的活跃客户端连接列表（IP 末段自动脱敏，防止内网拓扑泄露）。
 
 ### 2. 生产级运维诊断提示词 (Prompts)
 为大模型提供标准化运维 SOP 模板：
 - **`redis_diagnose_memory`**：指引模型按“基线核对 -> 碎片率分析 -> 复合键采样 -> 单键诊断 -> 调优报告”闭环排查内存瓶颈；
-- **`redis_analyze_slowlog`**：指引模型按“拉取慢查 -> 命令归类 -> O(N) 及单线程阻塞根因定级 -> 调优建议”分析高耗时指令。
+- **`redis_analyze_slowlog`**：指引模型按“拉取慢查 -> 命令归类 -> O(N) 及单线程阻塞根因定级 -> 调优建议”分析高耗时指令；
+- **`redis_troubleshoot_bigkeys`**：指引模型按“全库采样 -> O(1) 基数探查 -> 单键内存与编码诊断 -> 分页渐进式切片替代 -> 异步 UNLINK 安全清理”排查治理巨型键。
 
 
 ---
@@ -616,8 +618,11 @@ uvx atengk-mcp-server-redis --transport sse --host 0.0.0.0 --port 8000
 | `MCP_REDIS_ALLOW_WRITE` | `false` | 正向显式授权写权限。值为 `true`、`1`、`yes`、`on` 时开启写操作 |
 | `MCP_REDIS_READ_ONLY` | `true` | 反向只读控制。显式设为 `false`、`0`、`no`、`off` 时解除只读并开启写权限 |
 | `MCP_REDIS_LOG_LEVEL` | `INFO` | 运行时日志输出级别。支持 `DEBUG`、`INFO`、`WARNING`、`ERROR`（日志严格绑定至 stderr） |
-| `MCP_REDIS_CONNECT_TIMEOUT` | `3.0` | Socket 连接超时保底时间（秒），防止节点宕机网络挂死 |
-| `MCP_REDIS_SOCKET_TIMEOUT` | `5.0` | Socket 指令执行超时保底时间（秒），亦支持别名 `MCP_REDIS_TIMEOUT` |
+| `MCP_REDIS_CONNECT_TIMEOUT` | `5.0` | Socket 连接超时保底时间（秒），防止节点宕机网络挂死 |
+| `MCP_REDIS_SOCKET_TIMEOUT` | `10.0` | Socket 指令执行超时保底时间（秒），亦支持别名 `MCP_REDIS_TIMEOUT` |
+| `MCP_REDIS_MAX_CONNECTIONS` | `50` | 单个连接池最大并发连接数上限，防止异常网络重试打满 Redis 连接 |
+| `MCP_REDIS_AUDIT_LOG` | - | 结构化命令审计日志输出目标（'stderr'、'stdout' 或文件路径，stdio 传输模式下自动重定向至 stderr 杜绝协议污染） |
+| `MCP_REDIS_MAX_UNBOUNDED_READ_ITEMS` | `2000` | 高危无界全量读取（HGETALL/SMEMBERS 等）元素上限防爆阈值，超过自动拦截 |
 | `MCP_REDIS_CONFIG` | - | 多实例连接配置文件路径（映射 `--config` 参数） |
 
 > 💡 **快速配置**：项目根目录提供了开箱即用的配置模板 [`.env.example`](./.env.example)，执行 `cp .env.example .env` 并按需微调即可快速完成本地或容器环境初始化。

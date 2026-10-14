@@ -14,10 +14,13 @@ from mcp_server_redis.core.env import (
     load_dotenv_if_exists,
     parse_bool_env,
     resolve_allow_write_from_env,
+    resolve_audit_log_from_env,
     resolve_cluster_flag_from_env,
     resolve_config_path_from_env,
     resolve_connect_timeout_from_env,
     resolve_log_level_from_env,
+    resolve_max_connections_from_env,
+    resolve_max_unbounded_read_items_from_env,
     resolve_redis_url_from_env,
     resolve_server_configuration,
     resolve_server_host_from_env,
@@ -432,30 +435,69 @@ def test_resolve_server_configuration_cluster_precedence() -> None:
 
 
 def test_resolve_connect_timeout_from_env() -> None:
-    """验证从环境变量解析 Socket 连接超时，异常时保底默认值 3.0。"""
+    """验证从环境变量解析 Socket 连接超时，异常时保底默认值 5.0。"""
     with patch.dict(os.environ, {}, clear=True):
-        assert resolve_connect_timeout_from_env() == 3.0
+        assert resolve_connect_timeout_from_env() == 5.0
 
-    with patch.dict(os.environ, {"MCP_REDIS_CONNECT_TIMEOUT": "5.5"}, clear=True):
-        assert resolve_connect_timeout_from_env() == 5.5
+    with patch.dict(os.environ, {"MCP_REDIS_CONNECT_TIMEOUT": "7.5"}, clear=True):
+        assert resolve_connect_timeout_from_env() == 7.5
 
     with patch.dict(os.environ, {"MCP_REDIS_CONNECT_TIMEOUT": "invalid"}, clear=True):
-        assert resolve_connect_timeout_from_env() == 3.0
+        assert resolve_connect_timeout_from_env() == 5.0
 
     with patch.dict(os.environ, {"MCP_REDIS_CONNECT_TIMEOUT": "-1"}, clear=True):
-        assert resolve_connect_timeout_from_env() == 3.0
+        assert resolve_connect_timeout_from_env() == 5.0
 
 
 def test_resolve_socket_timeout_from_env() -> None:
-    """验证从环境变量解析 Socket 指令超时，支持两种变量名，异常时保底默认值 5.0。"""
+    """验证从环境变量解析 Socket 指令超时，支持两种变量名，异常时保底默认值 10.0。"""
     with patch.dict(os.environ, {}, clear=True):
-        assert resolve_socket_timeout_from_env() == 5.0
+        assert resolve_socket_timeout_from_env() == 10.0
 
     with patch.dict(os.environ, {"MCP_REDIS_SOCKET_TIMEOUT": "8.0"}, clear=True):
         assert resolve_socket_timeout_from_env() == 8.0
 
-    with patch.dict(os.environ, {"MCP_REDIS_TIMEOUT": "10.0"}, clear=True):
-        assert resolve_socket_timeout_from_env() == 10.0
+    with patch.dict(os.environ, {"MCP_REDIS_TIMEOUT": "15.0"}, clear=True):
+        assert resolve_socket_timeout_from_env() == 15.0
 
     with patch.dict(os.environ, {"MCP_REDIS_SOCKET_TIMEOUT": "bad_float"}, clear=True):
-        assert resolve_socket_timeout_from_env() == 5.0
+        assert resolve_socket_timeout_from_env() == 10.0
+
+
+def test_resolve_max_connections_from_env() -> None:
+    """验证从环境变量解析最大连接池容量，异常时保底默认值 50。"""
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_max_connections_from_env() == 50
+
+    with patch.dict(os.environ, {"MCP_REDIS_MAX_CONNECTIONS": "100"}, clear=True):
+        assert resolve_max_connections_from_env() == 100
+
+    with patch.dict(os.environ, {"MCP_REDIS_MAX_CONNECTIONS": "0"}, clear=True):
+        assert resolve_max_connections_from_env() == 50
+
+    with patch.dict(os.environ, {"MCP_REDIS_MAX_CONNECTIONS": "invalid"}, clear=True):
+        assert resolve_max_connections_from_env() == 50
+
+
+def test_resolve_audit_log_from_env() -> None:
+    """验证从环境变量解析审计日志输出目标。"""
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_audit_log_from_env() is None
+
+    with patch.dict(os.environ, {"MCP_REDIS_AUDIT_LOG": "stderr"}, clear=True):
+        assert resolve_audit_log_from_env() == "stderr"
+
+    with patch.dict(os.environ, {"MCP_REDIS_AUDIT_LOG": "/var/log/redis.jsonl"}, clear=True):
+        assert resolve_audit_log_from_env() == "/var/log/redis.jsonl"
+
+
+def test_resolve_max_unbounded_read_items_from_env() -> None:
+    """验证从环境变量解析全量读取 BigKey 防爆阈值，异常时保底默认值 2000。"""
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_max_unbounded_read_items_from_env() == 2000
+
+    with patch.dict(os.environ, {"MCP_REDIS_MAX_UNBOUNDED_READ_ITEMS": "5000"}, clear=True):
+        assert resolve_max_unbounded_read_items_from_env() == 5000
+
+    with patch.dict(os.environ, {"MCP_REDIS_MAX_UNBOUNDED_READ_ITEMS": "abc"}, clear=True):
+        assert resolve_max_unbounded_read_items_from_env() == 2000

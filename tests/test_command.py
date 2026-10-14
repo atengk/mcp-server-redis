@@ -655,3 +655,128 @@ async def test_redis_execute_command_pipeline_individual_error(
         assert res["results"][1]["status"] == "error"
         assert res["results"][1]["error_type"] == "ResponseError"
         assert "WRONGTYPE" in res["results"][1]["result"]
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_bigkey_defense_single_commands(
+    sample_registry: ConnectionRegistry,
+    readonly_guard: SecurityGuard,
+) -> None:
+    """验证对 HGETALL/SMEMBERS/LRANGE/ZRANGE 等无界全量读取的 BigKey 防爆预检拦截。"""
+    mock_client = AsyncMock()
+
+    # 1. HGETALL 超过 2000 项被拦截
+    mock_client.execute_command = AsyncMock(return_value=2500)
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_execute_command(
+            registry=sample_registry,
+            command="HGETALL user:large_hash",
+            guard=readonly_guard,
+        )
+        assert res["status"] == "error"
+        assert res["error_type"] == "BigKeyReadBlockedError"
+        assert "2500" in res["message"]
+        assert "HSCAN" in res["message"]
+
+    # 2. SMEMBERS 超过阈值被拦截
+    mock_client.execute_command = AsyncMock(return_value=3000)
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_execute_command(
+            registry=sample_registry,
+            command="SMEMBERS user:large_set",
+            guard=readonly_guard,
+        )
+        assert res["status"] == "error"
+        assert res["error_type"] == "BigKeyReadBlockedError"
+        assert "SSCAN" in res["message"]
+
+    # 3. LRANGE key 0 -1 超过阈值被拦截
+    mock_client.execute_command = AsyncMock(return_value=2001)
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_execute_command(
+            registry=sample_registry,
+            command="LRANGE my_events 0 -1",
+            guard=readonly_guard,
+        )
+        assert res["status"] == "error"
+        assert res["error_type"] == "BigKeyReadBlockedError"
+        assert "有界范围切片" in res["message"]
+
+    # 4. ZRANGE key 0 -1 超过自定义阈值被拦截
+    mock_client.execute_command = AsyncMock(return_value=500)
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_execute_command(
+            registry=sample_registry,
+            command="ZRANGE leaderboard 0 -1",
+            guard=readonly_guard,
+            max_unbounded_read_items=100,  # 自定义较小阈值
+        )
+        assert res["status"] == "error"
+        assert res["error_type"] == "BigKeyReadBlockedError"
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_bigkey_defense_allows_normal_reads(
+    sample_registry: ConnectionRegistry,
+    readonly_guard: SecurityGuard,
+) -> None:
+    """验证元素数量在阈值以内时正常放行读取。"""
+    mock_client = AsyncMock()
+    # 模拟探查 HLEN 返回 50，实际 HGETALL 返回 {"f1": "v1"}
+    mock_client.execute_command = AsyncMock(side_effect=[50, {"f1": "v1"}])
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_execute_command(
+            registry=sample_registry,
+            command="HGETALL small_hash",
+            guard=readonly_guard,
+        )
+        assert res["result"] == {"f1": "v1"}
+        assert res["data_type"] == "dict"
+        assert res["is_truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_bigkey_pipeline_blocked(
+    sample_registry: ConnectionRegistry,
+    readonly_guard: SecurityGuard,
+) -> None:
+    """验证管道批处理中若包含超出阈值的 BigKey 读取则前置拦截阻断。"""
+    mock_client = AsyncMock()
+    # 模拟 HLEN 探查返回 5000
+    mock_client.execute_command = AsyncMock(return_value=5000)
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_execute_command(
+            registry=sample_registry,
+            commands=["PING", "HGETALL giant_hash"],
+            guard=readonly_guard,
+        )
+        assert res["status"] == "error"
+        assert res["error_type"] == "BigKeyReadBlockedError"
+        assert "giant_hash" in res["message"]
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_audit_logger_integration(
+    sample_registry: ConnectionRegistry,
+    readonly_guard: SecurityGuard,
+) -> None:
+    """验证命令执行时向 AuditLogger 完整投递结构化审计事件。"""
+    mock_client = AsyncMock()
+    mock_client.execute_command = AsyncMock(return_value="PONG")
+    mock_audit = MagicMock()
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        res = await redis_execute_command(
+            registry=sample_registry,
+            command="PING",
+            guard=readonly_guard,
+            audit_logger=mock_audit,
+        )
+        assert res["result"] == "PONG"
+        mock_audit.log.assert_called_once()
+        call_kwargs = mock_audit.log.call_args.kwargs
+        assert call_kwargs["command"] == "PING"
+        assert call_kwargs["status"] == "success"
+        assert "duration_ms" in call_kwargs
