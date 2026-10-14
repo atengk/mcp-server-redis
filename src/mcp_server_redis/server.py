@@ -27,6 +27,12 @@ SERVER_VERSION: Final[str] = "2.0.0"
 
 from mcp_server_redis.core.audit import AuditLogger
 from mcp_server_redis.core.connection import ConnectionRegistry
+from mcp_server_redis.core.doctor import (
+    DoctorRunner,
+    format_json_report,
+    format_terminal_report,
+    get_version_fingerprint,
+)
 from mcp_server_redis.core.env import ServerConfig, resolve_server_configuration
 from mcp_server_redis.core.guard import SecurityGuard
 from mcp_server_redis.prompts import register_prompts
@@ -83,68 +89,124 @@ def setup_healthz_routes(server: FastMCP, registry: ConnectionRegistry) -> None:
 def build_argument_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器。
 
+    按照逻辑功能分组归类参数，并附加典型场景使用示例。
+
     @return 配置完成的 ArgumentParser 实例
     """
+    epilog_text = """
+使用示例 (Examples):
+  # 1. 默认全局只读模式启动并监听于标准 stdio 管道 (Claude Desktop / Cursor 推荐):
+  atengk-mcp-server-redis --url "redis://localhost:6379/0"
+
+  # 2. 显式开启数据写权限并持久化结构化审计日志:
+  atengk-mcp-server-redis --url "redis://:pwd@remote.host:6379/0" --allow-write --audit-log /var/log/redis_audit.jsonl
+
+  # 3. 加载多环境连接配置文件并以 HTTP SSE 网关模式启动:
+  atengk-mcp-server-redis --config ./connections.yaml --transport sse --host 0.0.0.0 --port 8000
+
+  # 4. 执行生产环境连通性、配置与权限四维健康自检探针:
+  atengk-mcp-server-redis --url "redis://localhost:6379/0" --doctor
+
+  # 5. 导出 CI/CD 机器可读的结构化 JSON 诊断报告:
+  atengk-mcp-server-redis --config ./connections.yaml --doctor --json
+
+  # 6. 查看服务版本与底层运行时环境指纹:
+  atengk-mcp-server-redis --version
+"""
     parser = argparse.ArgumentParser(
         prog="mcp-server-redis",
         description="生产级 Redis 模型上下文协议 (MCP) 服务端",
+        epilog=epilog_text,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
+
+    # 1. 基础连接配置
+    conn_group = parser.add_argument_group("基础连接配置 (Connection Options)")
+    conn_group.add_argument(
         "--url",
         type=str,
         default=None,
         help="单个 Redis 连接 URL（默认读取 MCP_REDIS_URL 或 MCP_REDIS_HOST/PORT 等环境变量）",
     )
-    parser.add_argument(
+    conn_group.add_argument(
         "--config",
         type=str,
         default=None,
         help="多实例连接配置文件路径（默认读取 MCP_REDIS_CONFIG 环境变量，支持 YAML / JSON）",
     )
-    parser.add_argument(
+    conn_group.add_argument(
+        "--cluster",
+        action="store_true",
+        default=False,
+        help="激活 Redis Cluster 分片集群连接模式（默认读取 MCP_REDIS_CLUSTER 环境变量或连接配置）",
+    )
+
+    # 2. 安全与权限控制
+    sec_group = parser.add_argument_group("安全与权限控制 (Security & Permissions)")
+    sec_group.add_argument(
         "--allow-write",
         action="store_true",
         default=False,
         help="显式开启写操作权限（默认全局强只读，支持通过 MCP_REDIS_ALLOW_WRITE=true 或 MCP_REDIS_READ_ONLY=false 开启）",
     )
-    parser.add_argument(
-        "--log-level",
-        type=str.upper,
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    sec_group.add_argument(
+        "--audit-log",
+        type=str,
         default=None,
-        help="运行时日志级别（DEBUG、INFO、WARNING、ERROR，默认读取 MCP_REDIS_LOG_LEVEL 或默认 INFO）",
+        help="命令审计日志输出目标（'stderr', 'stdout' 或文件路径；默认读取 MCP_REDIS_AUDIT_LOG 环境变量）",
     )
-    parser.add_argument(
+
+    # 3. 服务与网络传输
+    trans_group = parser.add_argument_group("服务与网络传输 (Transport & Server)")
+    trans_group.add_argument(
         "--transport",
         type=str.lower,
         choices=["stdio", "sse"],
         default=None,
         help="传输协议模式（stdio 或 sse，默认读取 MCP_REDIS_TRANSPORT 环境变量或默认 stdio）",
     )
-    parser.add_argument(
+    trans_group.add_argument(
         "--host",
         type=str,
         default=None,
         help="SSE 模式服务监听主机（默认读取 MCP_REDIS_SERVER_HOST 环境变量或默认 0.0.0.0）",
     )
-    parser.add_argument(
+    trans_group.add_argument(
         "--port",
         type=int,
         default=None,
         help="SSE 模式服务监听端口（默认读取 MCP_REDIS_SERVER_PORT 环境变量或默认 8000）",
     )
-    parser.add_argument(
-        "--cluster",
+    trans_group.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default=None,
+        help="运行时日志级别（DEBUG、INFO、WARNING、ERROR，默认读取 MCP_REDIS_LOG_LEVEL 或默认 INFO）",
+    )
+
+    # 4. 运维诊断与信息
+    diag_group = parser.add_argument_group("运维诊断与信息 (Diagnostics & Info)")
+    diag_group.add_argument(
+        "--doctor",
         action="store_true",
         default=False,
-        help="激活 Redis Cluster 分片集群连接模式（默认读取 MCP_REDIS_CLUSTER 环境变量或连接配置）",
+        help="执行生产环境连通性、配置语义与写权限四维健康自检探针并退出",
     )
-    parser.add_argument(
-        "--audit-log",
-        type=str,
-        default=None,
-        help="命令审计日志输出目标（'stderr', 'stdout' 或文件路径；默认读取 MCP_REDIS_AUDIT_LOG 环境变量）",
+    diag_group.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="配合 --doctor 标志时以结构化 JSON 格式输出自检报告（便于 CI/CD 流水线解析）",
     )
+    diag_group.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=get_version_fingerprint(SERVER_VERSION),
+        help="显示详细服务版本号与底层运行时环境指纹并退出",
+    )
+
     return parser
 
 
@@ -152,7 +214,7 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
     """解析命令行参数或传入参数列表。
 
     @param args 可选自定义参数列表，缺省时读取 sys.argv[1:]
-    @return 包含 url, config, allow_write, log_level, transport, host, port, cluster, audit_log 键的配置字典
+    @return 包含各个参数项的配置字典
     """
     parser = build_argument_parser()
     parsed = parser.parse_args(args)
@@ -166,6 +228,8 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
         "port": parsed.port,
         "cluster": parsed.cluster,
         "audit_log": parsed.audit_log,
+        "doctor": parsed.doctor,
+        "json": parsed.json,
     }
 
 
@@ -272,6 +336,16 @@ def main() -> None:
         cli_cluster=config_dict["cluster"],
         cli_audit_log=config_dict["audit_log"],
     )
+
+    # 若指定了 --doctor 标志，运行生产环境健康自检探针并按检测结果退出
+    if config_dict.get("doctor"):
+        runner = DoctorRunner(server_config=server_config)
+        report = asyncio.run(runner.run_diagnostics())
+        if config_dict.get("json"):
+            sys.stdout.write(format_json_report(report) + "\n")
+        else:
+            sys.stdout.write(format_terminal_report(report) + "\n")
+        sys.exit(0 if report.is_healthy else 1)
 
     # 动态设置日志级别，输出流严格绑定 sys.stderr，杜绝污染 stdout 协议流
     numeric_level = getattr(logging, server_config.log_level, logging.INFO)

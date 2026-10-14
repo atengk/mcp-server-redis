@@ -166,6 +166,14 @@ _避免使用_: 端口盲测 (Blind Port Check)、虚拟探针 (Dummy Probe)
 提取 Redis `CLIENT LIST` 时对内网客户端 IP 地址末段自动掩码并结构化展示运行状态的脱敏处理机制，防止内网拓扑嗅探。  
 _避免使用_: 裸 IP 暴露 (Raw IP Exposure)、文本原样倾泻 (Raw Text Dumping)
 
+**Doctor 自检诊断器 (Doctor Diagnostic Runner)**:
+独立于协议运行时、面向开发者与运维提供的一键式环境、配置、网络连通与写权限深度体检组件，支持终端富文本卡片与 CI/CD 结构化 JSON 双模输出。  
+_避免使用_: 测试脚本 (Test Script)、连通探针 (Simple Ping)
 
+**环境指纹 (Environment Fingerprint)**:
+CLI 版本查询时输出的包含服务版本、Python 解释器版本、操作系统平台与关键底层依赖库（mcp、redis、pydantic、yaml）版本摘要的精确运行时标识。  
+_避免使用_: 裸版本号 (Raw Version)、字符串版本 (String Version)
 
-
+**隔离写探针 (Isolated Write Probe)**:
+自检诊断器在验证实际写权限时使用的纳秒级 UUID 隔离键（`__mcp_doctor_probe_{uuid}__`）、5 秒双保险 TTL 校验与即时物理清理机制，杜绝生产脏数据残留。  
+_避免使用_: 脏写测试 (Dirty Write)、业务键覆盖 (Business Key Overwrite)

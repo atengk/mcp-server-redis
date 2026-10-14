@@ -32,6 +32,7 @@
 | [ADR-0011](./0011-canonical-naming-and-full-mcp-protocol.md) | 规范动宾工具契约、无别名纯净暴露与全 MCP 协议矩阵 | 已采纳 | 2026-10-14 |
 | [ADR-0012](./0012-resilience-pipeline-and-safe-blocking.md) | 游标续翻分页、阻塞超时收敛、空闲心跳与管道批处理网关 | 已采纳 | 2026-10-14 |
 | [ADR-0013](./0013-production-observability-bigkey-defense-and-healthz.md) | 连接池超时基线、结构化审计日志、BigKey 内存防爆与云原生探活 | 已采纳 | 2026-10-14 |
+| [ADR-0014](./0014-cli-diagnostics-doctor-and-version.md) | CLI 运维增强套件（--help 逻辑分组、--version 环境指纹与 --doctor 全景自检） | 已采纳 | 2026-10-14 |
 
 
 

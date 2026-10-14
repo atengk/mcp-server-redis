@@ -120,6 +120,8 @@ def test_build_argument_parser_defaults() -> None:
     assert args.port is None
     assert args.cluster is False
     assert args.audit_log is None
+    assert args.doctor is False
+    assert args.json is False
 
 
 def test_parse_cli_arguments_custom_values() -> None:
@@ -140,6 +142,8 @@ def test_parse_cli_arguments_custom_values() -> None:
             "--cluster",
             "--audit-log",
             "stderr",
+            "--doctor",
+            "--json",
         ]
     )
 
@@ -152,6 +156,36 @@ def test_parse_cli_arguments_custom_values() -> None:
     assert config_dict["port"] == 8888
     assert config_dict["cluster"] is True
     assert config_dict["audit_log"] == "stderr"
+    assert config_dict["doctor"] is True
+    assert config_dict["json"] is True
+
+
+def test_main_doctor_exit_codes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 main() 执行 --doctor 时依据自检结果输出正确 POSIX 退出码。"""
+    from mcp_server_redis.core.doctor import DoctorCheckItem, DoctorReport
+
+    # 1. 模拟全部自检项通过 -> 退出码 0
+    monkeypatch.setattr("sys.argv", ["mcp-server-redis", "--doctor"])
+    mock_success_report = DoctorReport(items=[], duration_ms=5.0)
+    with patch(
+        "mcp_server_redis.core.doctor.DoctorRunner.run_diagnostics",
+        return_value=mock_success_report,
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+
+    # 2. 模拟存在失败项 -> 退出码 1
+    fail_item = DoctorCheckItem(
+        category="Connection", name="Redis", status="fail", message="连接超时"
+    )
+    mock_fail_report = DoctorReport(items=[fail_item], duration_ms=5.0)
+    with patch(
+        "mcp_server_redis.core.doctor.DoctorRunner.run_diagnostics", return_value=mock_fail_report
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
 
 
 def test_parse_cli_arguments_with_config_file(tmp_path: Path) -> None:

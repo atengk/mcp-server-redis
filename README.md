@@ -376,6 +376,24 @@ docker-compose up -d
 npx @modelcontextprotocol/inspector uvx atengk-mcp-server-redis --url "redis://localhost:6379/0"
 ```
 
+### 方式 6：一键环境连通性自检与版本环境指纹 (`--doctor` / `--version`)
+
+在配置客户端前，推荐使用 `--doctor` 进行四维全景环境体检（Python 依赖、配置文件、网络 RTT、写权限探针），提前发现潜在连通障碍：
+
+```bash
+# 1. 针对当前默认环境或 .env 进行一键自检（终端富文本卡片展示）
+uvx atengk-mcp-server-redis --doctor
+
+# 2. 检查指定远程 Redis 连接连通性与写权限隔离探针
+uvx atengk-mcp-server-redis --url "redis://:password@remote.host:6379/0" --allow-write --doctor
+
+# 3. 对多实例配置文件进行全量巡检并导出结构化 JSON 报告（CI/CD 流水线友好）
+uvx atengk-mcp-server-redis --config ./connections.yaml --doctor --json
+
+# 4. 查看详细服务版本与底层运行时环境指纹 (Python/mcp/redis-py/OS)
+uvx atengk-mcp-server-redis --version
+```
+
 ---
 
 ## 🔌 MCP 客户端通用集成配置
