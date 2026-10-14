@@ -32,9 +32,10 @@
 
 ## 🌟 核心特性
 
-- ⚡ **原生 Redis CLI 命令网关 (`redis_command`)**：
+- ⚡ **原生 Redis CLI 命令网关 (`redis_execute_command`)**：
   - 单行原生命令语法交互（如 `"HGETALL user:1001"`、`"SET message 'hello world' EX 60"`），完全释放大模型对 300+ Redis 原生指令及模块（JSON、Search 等）的表达力；
   - 内置 POSIX 标准引号分词解析，原生支持带空格与特殊字符的复杂参数；
+  - 智能 INFO 命令分节结构化与数值自适应推导，消除 60%+ 上下文 Token 浪费；
   - 统一输出自解释执行信封（`command`、`result`、`data_type`、`is_truncated`、`total_count`）。
 - 🛡️ **生产级双重安全防护体系 (Dual Write Gate)**：
   - **默认强只读守卫**：内置 80+ 常用只读命令白名单（`GET`、`HGET`、`LRANGE`、`SMEMBERS`、`TTL` 等），无论何种模式均安全放行；
@@ -51,11 +52,12 @@
   - 非文本二进制数据自动转换为 Base64 编码并标明 `is_binary: True`，绝不发生解码崩溃；超长文本内容安全截断。
 - 🔍 **核心探查辅助工具与无状态动态路由**：
   - `redis_list_connections`：一站式查阅多实例连接配置、连接别名与只读状态；
-  - `redis_scan_keys`：内部自动循环迭代 `SCAN` 游标聚合返回，避免大模型手动迭代游标造成死循环；
-  - `redis_key_inspect`：单键多维诊断（类型、TTL/PTTL、内存占用字节及底层编码格式）；
+  - `redis_scan_keys`：内部自动循环迭代 `SCAN` 游标聚合返回，支持 `include_meta=True` 单次并发拉取类型与 TTL，规避 N+1 往返；
+  - `redis_inspect_key`：单键多维诊断（类型、TTL/PTTL、内存占用字节及底层编码格式）；
   - 所有工具统一支持 `connection`（连接别名）与 `db`（0~15 逻辑库编号）参数，物理禁止在连接池上执行全局有状态 `SELECT` 指令。
-- 🌐 **集群跨槽 (Cross-Slot) 异常优雅降级**：
-  - 自动识别 Redis Cluster 跨槽执行冲突并转换为语义化提示，引导大模型自动拆分为单键重试。
+- 🌐 **全 MCP 协议矩阵支持 (Tools + Resources + Prompts)**：
+  - 挂载 `redis://{connection}/info` 与 `redis://{connection}/slowlog` 只读系统快照；
+  - 提供 `redis_diagnose_memory` 与 `redis_analyze_slowlog` 标准排障 SOP 提示词模板。
 
 ---
 
@@ -63,28 +65,29 @@
 
 | MCP 工具名称 | 核心参数契约 | 功能描述与安全门禁 |
 | :--- | :--- | :--- |
-| **`redis_command`** | `(command: str, connection=None, db=None, confirm=False)` | **核心命令网关**：原生 Redis 命令执行通道。<br>• 80+ 只读白名单直接放行<br>• 写命令受双重写门禁管辖（`--allow-write`）<br>• `DEL`/`UNLINK` 强制要求 `confirm=True` 二次确认<br>• 永久物理阻断破坏性指令（`FLUSHALL`/`KEYS *` 等）<br>• 超过 100 项大集合自动截断防 OOM |
+| **`redis_execute_command`** | `(command: str, connection=None, db=None, confirm=False)` | **核心命令网关**：原生 Redis 命令执行通道。<br>• 80+ 只读白名单直接放行<br>• 写命令受双重写门禁管辖（`--allow-write`）<br>• `DEL`/`UNLINK` 强制要求 `confirm=True` 二次确认<br>• 永久物理阻断破坏性指令（`FLUSHALL`/`KEYS *` 等）<br>• `INFO` 命令自动智能结构化紧凑字典<br>• 超过 100 项大集合自动截断防 OOM |
 | **`redis_list_connections`** | `()` | **连接实例检视**：查看所有已配置的 Redis 连接别名、脱敏 URL、数据库编号及默认连接标识。 |
-| **`redis_scan_keys`** | `(pattern="*", limit=50, type=None, connection=None, db=None)` | **聚合键扫描器**：非阻塞循环迭代底层游标聚合检索匹配键名，默认最多 50 条，单次硬上限 200 条，杜绝游标死循环。 |
-| **`redis_key_inspect`** | `(key: str, connection=None, db=None)` | **单键多维诊断**：聚合获取目标键的类型、TTL/PTTL、内存占用（`MEMORY USAGE`）与底层存储编码。 |
+| **`redis_scan_keys`** | `(pattern="*", limit=50, type=None, connection=None, db=None, include_meta=False)` | **聚合键扫描器**：非阻塞循环迭代底层游标聚合检索匹配键名，默认最多 50 条，单次硬上限 200 条，杜绝游标死循环。支持 `include_meta=True` 单次往返并发附带类型与 TTL。 |
+| **`redis_inspect_key`** | `(key: str, connection=None, db=None)` | **单键多维诊断**：聚合获取目标键的类型、TTL/PTTL、内存占用（`MEMORY USAGE`）与底层存储编码。 |
+
 
 ---
 
-## 💡 `redis_command` 调用示例
+## 💡 `redis_execute_command` 调用示例
 
 ### 1. 基础只读查询与带空格传参
 ```python
 # 1. 查询字符串（支持带引号空格传参）
-redis_command(command="GET 'user:session:1001'")
+redis_execute_command(command="GET 'user:session:1001'")
 
 # 2. 读取 Hash 散列全量字段
-redis_command(command="HGETALL user:profile:1001")
+redis_execute_command(command="HGETALL user:profile:1001")
 
 # 3. 分页读取 List 列表
-redis_command(command="LRANGE task_queue 0 19")
+redis_execute_command(command="LRANGE task_queue 0 19")
 
 # 4. 探活当前实例
-redis_command(command="PING")
+redis_execute_command(command="PING")
 ```
 
 返回的标准信封结构示例：
@@ -104,16 +107,16 @@ redis_command(command="PING")
 ### 2. 数据写入与修改（需 `--allow-write`）
 ```python
 # 写入字符串并设置 60 秒过期时间
-redis_command(command="SET message 'Hello, Antigravity!' EX 60")
+redis_execute_command(command="SET message 'Hello, Antigravity!' EX 60")
 
 # 向 Hash 中写入字段
-redis_command(command="HSET user:profile:1001 status active")
+redis_execute_command(command="HSET user:profile:1001 status active")
 ```
 
 ### 3. 高危删除二次确认工作流 (DEL / UNLINK)
 ```python
 # 步骤 1：初次发起删除（confirm 默认为 False）
-redis_command(command="DEL cache:item1 cache:item2")
+redis_execute_command(command="DEL cache:item1 cache:item2")
 ```
 返回待确认结构体（**此时未执行物理删除**）：
 ```json
@@ -122,15 +125,15 @@ redis_command(command="DEL cache:item1 cache:item2")
   "command": "DEL cache:item1 cache:item2",
   "keys": ["cache:item1", "cache:item2"],
   "target_count": 2,
-  "message": "高危删除操作需要确认。请核对目标键名并在确认后传入 confirm=True 执行物理删除。",
+  "message": "该高危删除操作涉及 2 个键: ['cache:item1', 'cache:item2']。为防止非预期数据丢失，请在仔细核对后显式传入 confirm=True 确认执行。",
   "data_type": "confirmation_required",
   "is_truncated": false,
-  "total_count": null
+  "total_count": 2
 }
 ```
 ```python
 # 步骤 2：向用户确认后，显式传入 confirm=True 执行真实删除
-redis_command(command="DEL cache:item1 cache:item2", confirm=True)
+redis_execute_command(command="DEL cache:item1 cache:item2", confirm=True)
 ```
 返回删除影响结果：
 ```json
@@ -143,13 +146,35 @@ redis_command(command="DEL cache:item1 cache:item2", confirm=True)
 }
 ```
 
-### 4. 无状态多库与多连接切换
+### 4. 智能 INFO 命令分节结构化与数值转换
+直接执行 `INFO` 或 `INFO <section>`，服务端序列化器自动将上千行多段纯文本清洗转换为紧凑 JSON 字典，自动转换数值类型：
+```python
+# 获取内存分节紧凑字典
+redis_execute_command(command="INFO memory")
+```
+返回结果：
+```json
+{
+  "command": "INFO memory",
+  "result": {
+    "used_memory": 2097152,
+    "used_memory_human": "2.00M",
+    "used_memory_rss": 5242880,
+    "mem_fragmentation_ratio": 1.25
+  },
+  "data_type": "dict",
+  "is_truncated": false,
+  "total_count": 4
+}
+```
+
+### 5. 无状态多库与多连接切换
 ```python
 # 切换到 3 号逻辑库执行只读检查
-redis_command(command="DBSIZE", db=3)
+redis_execute_command(command="DBSIZE", db=3)
 
 # 切换到 staging 连接别名上的 1 号库执行查询
-redis_command(command="GET app_config", connection="staging", db=1)
+redis_execute_command(command="GET app_config", connection="staging", db=1)
 ```
 
 ---
@@ -187,26 +212,31 @@ redis_list_connections()
 ```
 
 ### 2. 聚合键扫描器 (`redis_scan_keys`)
+支持常规扫描与 `include_meta=True` 复合元数据扫描，在单次往返中并发拿齐键类型与 TTL，彻底终结 N+1：
 ```python
-# 检索前缀匹配键（支持类型过滤，内部自动遍历游标防死循环）
-redis_scan_keys(pattern="user:*", limit=10, type="hash")
+# 开启 include_meta=True 一站式扫描
+redis_scan_keys(pattern="user:*", limit=10, include_meta=True)
 ```
 返回结果：
 ```json
 {
   "pattern": "user:*",
-  "type": "hash",
+  "type": null,
   "count": 2,
   "keys": ["user:profile:1001", "user:profile:1002"],
+  "entries": [
+    { "key": "user:profile:1001", "type": "hash", "ttl": 3600 },
+    { "key": "user:profile:1002", "type": "hash", "ttl": -1 }
+  ],
   "cursor": 0,
   "is_truncated": false
 }
 ```
 
-### 3. 单键多维综合诊断 (`redis_key_inspect`)
+### 3. 单键多维综合诊断 (`redis_inspect_key`)
 ```python
 # 一站式单键多维诊断（类型、生命周期、内存占用与编码结构）
-redis_key_inspect(key="user:profile:1001")
+redis_inspect_key(key="user:profile:1001")
 ```
 返回结果：
 ```json
@@ -220,6 +250,23 @@ redis_key_inspect(key="user:profile:1001")
   "encoding": "listpack"
 }
 ```
+
+---
+
+## 🌐 MCP 只读资源与排障提示词矩阵 (Resources & Prompts)
+
+除了 4 个核心工具，服务还完整实现了 MCP 规范的 Resources 与 Prompts 原语：
+
+### 1. 只读系统快照资源 (Resources)
+现代 MCP 客户端（如 Claude Desktop 或 Cursor）可在不产生工具调用的前提下直接注入只读上下文：
+- `redis://{connection}/info` / `redis://info`：指定连接或默认连接的实时综合指标快照（MIME: `application/json`）；
+- `redis://{connection}/slowlog` / `redis://slowlog`：指定连接或默认连接的最新 10 条慢查询日志切片。
+
+### 2. 生产级运维诊断提示词 (Prompts)
+为大模型提供标准化运维 SOP 模板：
+- **`redis_diagnose_memory`**：指引模型按“基线核对 -> 碎片率分析 -> 复合键采样 -> 单键诊断 -> 调优报告”闭环排查内存瓶颈；
+- **`redis_analyze_slowlog`**：指引模型按“拉取慢查 -> 命令归类 -> O(N) 及单线程阻塞根因定级 -> 调优建议”分析高耗时指令。
+
 
 ---
 
@@ -579,41 +626,42 @@ uvx atengk-mcp-server-redis --config ./connections.yaml --allow-write
 ## 🔒 深度安全防御体系
 
 ```
-                       ┌──────────────────────────────┐
-                       │   大模型发起 redis_command    │
-                       └──────────────┬───────────────┘
-                                      │
-                                      ▼
-                         [ 破坏性指令物理切断拦截器 ] ────► 命中 FLUSHALL/KEYS* 等 ──► 抛出 DestructiveCommandError 物理阻断
-                                      │ (安全通过)
-                                      ▼
-                           [ 命令分类裁决器 Classifier ]
-                                /             \
-                     (只读白名单 80+ 命令)    (非只读命令 / 模块扩展命令)
-                              │                     │
-                              │                     ▼
-                              │             [ 双重写门禁检测 ]
-                              │             1. CLI --allow-write 是否启用？
-                              │             2. 目标连接 readonly 是否为 false？
-                              │                     │ (任一不满足即拦截)
-                              │                     ▼
-                              │            [ 删除二次确认门禁 ]
-                              │            命中 DEL / UNLINK 且 confirm==False？
-                              │             ├── 是 ──► 返回待确认结构体 (终止执行)
-                              │             └── 否 (confirm==True)
-                              │                     │
-                              ▼                     ▼
-                      ┌──────────────────────────────┐
-                      │   下发底层 Redis 异步指令    │
-                      └──────────────┬───────────────┘
-                                     │
-                                     ▼
-                         [ 集合切片守卫与安全序列化 ]
-                        • 大集合超过 100 项自动截断
-                        • UTF-8 / Base64 自适应转码
-                                     │
-                                     ▼
-                         [ 统一结果信封包装输出 ]
+                       ┌──────────────────────────────────────┐
+                       │   大模型发起 redis_execute_command   │
+                       └──────────────────┬───────────────────┘
+                                          │
+                                          ▼
+                             [ 破坏性指令物理切断拦截器 ] ────► 命中 FLUSHALL/KEYS* 等 ──► 抛出 DestructiveCommandError 物理阻断
+                                          │ (安全通过)
+                                          ▼
+                               [ 命令分类裁决器 Classifier ]
+                                    /             \
+                         (只读白名单 80+ 命令)    (非只读命令 / 模块扩展命令)
+                                  │                     │
+                                  │                     ▼
+                                  │             [ 双重写门禁检测 ]
+                                  │             1. CLI --allow-write 是否启用？
+                                  │             2. 目标连接 readonly 是否为 false？
+                                  │                     │ (任一不满足即拦截)
+                                  │                     ▼
+                                  │            [ 删除二次确认门禁 ]
+                                  │            命中 DEL / UNLINK 且 confirm==False？
+                                  │             ├── 是 ──► 返回待确认结构体 (终止执行)
+                                  │             └── 否 (confirm==True)
+                                  │                     │
+                                  ▼                     ▼
+                          ┌──────────────────────────────┐
+                          │   下发底层 Redis 异步指令    │
+                          └──────────────┬───────────────┘
+                                         │
+                                         ▼
+                             [ 集合切片守卫与安全序列化 ]
+                            • 大集合超过 100 项自动截断
+                            • UTF-8 / Base64 自适应转码
+                            • INFO 命令智能分节结构化
+                                         │
+                                         ▼
+                             [ 统一结果信封包装输出 ]
 ```
 
 1. **破坏性指令物理切断**：硬编码阻断 `FLUSHALL`、`FLUSHDB`、`SHUTDOWN`、`CONFIG`、`DEBUG` 及阻塞式 `KEYS *`；
@@ -630,7 +678,7 @@ uvx atengk-mcp-server-redis --config ./connections.yaml --allow-write
 | :--- | :--- | :--- |
 | **`ReadOnlyModeError`**<br>`服务处于只读保护模式...` | 在未传 `--allow-write` 的全局只读模式下尝试执行写操作（如 `SET`、`HSET`、`LPUSH` 等）。 | 若需写权限，在服务启动命令中显式追加 `--allow-write`（或环境变量 `MCP_REDIS_ALLOW_WRITE=true`）。 |
 | **`ReadOnlyConnectionError`**<br>`目标连接配置为只读...` | 虽然开启了全局 `--allow-write`，但在多实例配置中目标连接档案被显式标明 `readonly: true`。 | 检查 `connections.yaml`，确认是否需要在该特定环境开启写操作；若为生产保护从库，严禁修改。 |
-| **`confirmation_required`**<br>`status: confirmation_required` | 调用 `DEL` 或 `UNLINK` 命令时未显式传入 `confirm=True`。 | 属于正常安全二次确认拦截。大模型/调用方需在核对 `keys` 列表后，再次调用 `redis_command(..., confirm=True)`。 |
+| **`confirmation_required`**<br>`status: confirmation_required` | 调用 `DEL` 或 `UNLINK` 命令时未显式传入 `confirm=True`。 | 属于正常安全二次确认拦截。大模型/调用方需在核对 `keys` 列表后，再次调用 `redis_execute_command(..., confirm=True)`。 |
 | **`DestructiveCommandError`**<br>`物理切断破坏性高危指令...` | 尝试执行破坏性删库或阻塞指令（`FLUSHALL`、`FLUSHDB`、`KEYS *`、`SHUTDOWN`、`CONFIG` 等）。 | 底层永久物理拦截，无法通过任何参数绕过。请改用键前缀安全扫描 `redis_scan_keys` 或单键操作。 |
 | **`CrossSlotError`**<br>`Redis Cluster 跨槽执行拦截...` | 在分片集群中执行跨越不同哈希槽的多键命令（如 `MGET {user1}:a {user2}:b`）。 | 遵循语义化引导，将多键指令拆分为针对单一键或相同哈希标签（`{hash_tag}`）的多次独立单键命令。 |
 | **`ConnectionError`**<br>`Error connecting to host...` | Redis 端口未开放、网络不可达、防火墙拦截或连接超时。 | 使用 `Test-NetConnection` 或 `nc -zv` 验证网络链路，检查密码是否包含特殊字符（推荐使用离散环境变量配置）。 |
@@ -644,7 +692,7 @@ uvx atengk-mcp-server-redis --config ./connections.yaml --allow-write
 1. **阻塞式长订阅（Pub/Sub Streaming）**：
    - 不支持 `SUBSCRIBE` / `PSUBSCRIBE`。MCP 工具基于非流式单次同步响应范式，长连接事件推送应由专用的 MQ 消费者或微服务长连接处理。
 2. **跨请求有状态事务（Multi-Request Transactions）**：
-   - 不支持跨请求的 `MULTI` / `EXEC` / `WATCH` 会话。每次 `redis_command` 均为独立的无状态操作，底层连接池在并发复用时不保持会话级事务状态。
+   - 不支持跨请求的 `MULTI` / `EXEC` / `WATCH` 会话。每次 `redis_execute_command` 均为独立的无状态操作，底层连接池在并发复用时不保持会话级事务状态。
 3. **永久挂起阻塞式命令（Zero-Timeout Blocking Commands）**：
    - 执行 `BLPOP`、`BRPOP`、`BZPOPMIN` 等阻塞式读取时，**严禁将超时参数设为 `0`**（无限阻塞等待），否则会导致服务工作进程被永久挂起。建议传入短超时参数（如 `BLPOP mylist 1`）。
 4. **服务运行态配置动态篡改**：

@@ -187,6 +187,67 @@ def _sanitize_nested_item(val: Any, max_length: int = DEFAULT_MAX_LENGTH) -> tup
     return val_str, False, False
 
 
+def _parse_info_text(text: str, section_arg: str | None = None) -> dict[str, Any]:
+    """将 Redis INFO 原生输出文本解析为结构化紧凑字典。
+
+    自动分节、剔除无意义空行与注释，并自适应推导整型与浮点型数值。
+
+    @param text Redis INFO 输出原始文本
+    @param section_arg 用户可选指定的具体分节（如 'memory'）
+    @return 结构化字典
+    """
+    sections: dict[str, dict[str, Any]] = {}
+    current_section = "default"
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            parts = line.lstrip("#").strip().split()
+            if parts:
+                current_section = parts[0].lower()
+            continue
+        if ":" in line:
+            key, _, val = line.partition(":")
+            key = key.strip()
+            val = val.strip()
+
+            parsed_val: Any = val
+            if val.lower() not in ("nan", "inf", "-inf"):
+                # 排除可能带前导零的 Git SHA 或十六进制标识串
+                if len(val) > 1 and val.startswith("0") and not val.startswith("0."):
+                    parsed_val = val
+                else:
+                    try:
+                        parsed_val = int(val)
+                    except ValueError:
+                        try:
+                            # 仅针对包含单个小数点的数字串转浮点
+                            if val.count(".") == 1:
+                                parsed_val = float(val)
+                        except ValueError:
+                            parsed_val = val
+
+            if current_section not in sections:
+                sections[current_section] = {}
+            sections[current_section][key] = parsed_val
+
+    # 若指定了具体分节参数，优先提取该节并平铺返回
+    if section_arg:
+        sec_clean = section_arg.strip().lower()
+        if sec_clean in sections:
+            return sections[sec_clean]
+        if len(sections) == 1:
+            return next(iter(sections.values()))
+
+    # 若仅有单一分节且非 default
+    if len(sections) == 1 and "default" not in sections:
+        return next(iter(sections.values()))
+
+    return sections
+
+
 class SafeSerializer:
     """自适应安全序列化器。
 
@@ -408,6 +469,23 @@ class SafeSerializer:
         Returns:
             SerializedResult: 统一命令结果实体模型
         """
+        # 1. 智能 INFO 命令结构化解析
+        cmd_tokens = command.strip().split() if command else []
+        is_info_cmd = bool(cmd_tokens and cmd_tokens[0].upper() == "INFO")
+        if is_info_cmd and isinstance(raw, (str, bytes)):
+            text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+            section_arg = cmd_tokens[1] if len(cmd_tokens) > 1 else None
+            parsed_info = _parse_info_text(text, section_arg=section_arg)
+            if parsed_info:
+                return SerializedResult(
+                    command=command,
+                    result=parsed_info,
+                    data_type="dict",
+                    is_truncated=False,
+                    total_count=len(parsed_info),
+                    is_binary=False,
+                )
+
         if raw is None:
             return SerializedResult(
                 command=command,

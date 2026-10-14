@@ -114,8 +114,25 @@ _避免使用_: 容器备份 (Container Backup)、镜像仓库 (Image Registry)
 基于 `git-cliff` 与 Conventional Commits 提交历史，在版本打标时自动化解析提交范围、过滤非规范提交并结构化生成 Release 笔记与发行日志的工具组件。  
 _避免使用_: 日志生成脚本 (Log Script)、版本总结器 (Version Summarizer)
 
-**语义化 PR 门禁 (Semantic Pull Request Gate)**:
-在 GitHub 协作入口对贡献者发起的 Pull Request 标题施加的规范校验流程，强制标题符合 Conventional Commits 规范，保障版本日志生成的确定性。  
-_避免使用_: 标题校验器 (Title Validator)、PR 规则检查 (PR Rule Check)
+**规范动宾契约 (Canonical Verb-Object Contract)**:
+严格遵循“前缀_动作_对象”语序的标准化 MCP 工具契约，消除自然语言意图歧义，并为历史工具名提供无缝兼容别名。  
+_避免使用_: 动作乱序 (Arbitrary Ordering)、松散命名 (Loose Naming)
+
+**智能 INFO 结构化器 (Smart INFO Parser)**:
+在命令网关序列化层将 Redis 原生非结构化多段文本自动转为分节紧凑字典的解析单元。  
+_避免使用_: 文本清洗脚本 (Text Cleaner)、正则转换器 (Regex Converter)
+
+**轻量复合元数据扫描 (Metadata-Enriched Scan)**:
+在单次键空间扫描迭代中并行附加类型与过期时间元数据的复合查询模式，规避大模型连续发起多轮诊断的 N+1 交互瓶颈。  
+_避免使用_: 批量诊断器 (Batch Inspector)、深度检索 (Deep Search)
+
+**只读快照资源 (Readonly Snapshot Resource)**:
+遵循 `redis://{connection}/{resource}` 统一资源标识符挂载的 MCP 只读上下文切片，供模型开箱即用注入系统状态。  
+_避免使用_: 静态数据源 (Static Data Source)、资源文件 (Resource File)
+
+**诊断引导提示词 (Diagnostic Guided Prompt)**:
+向大模型客户端预置的标准运维与排障排查工作流模板，指导大模型以最少指令高效闭环排查业务异常。  
+_避免使用_: 快捷指令 (Shortcuts)、聊天模板 (Chat Template)
+
 
 

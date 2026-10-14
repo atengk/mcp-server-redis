@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from mcp.server.mcpserver.exceptions import UnexpectedToolError
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, GetPromptResult, TextContent
 
 from mcp_server_redis.server import (
     SERVER_VERSION,
@@ -31,14 +31,44 @@ async def test_create_app_mounts_all_4_tools() -> None:
     tool_names = {t.name for t in tools}
 
     expected_4_tools = {
-        "redis_command",
+        "redis_execute_command",
         "redis_list_connections",
         "redis_scan_keys",
-        "redis_key_inspect",
+        "redis_inspect_key",
     }
 
     assert tool_names == expected_4_tools
     assert len(tool_names) == 4
+
+
+@pytest.mark.asyncio
+async def test_create_app_mounts_resources_and_prompts() -> None:
+    """验证 create_app 挂载核心只读快照资源与诊断引导 Prompts 模板。"""
+    app = create_app(url="redis://localhost:6379/0", allow_write=False)
+
+    # 1. 验证 Prompts 挂载与生成
+    prompts = await app.list_prompts()
+    prompt_names = {p.name for p in prompts}
+    assert "redis_diagnose_memory" in prompt_names
+    assert "redis_analyze_slowlog" in prompt_names
+
+    p_mem = await app.get_prompt("redis_diagnose_memory", arguments={"connection": "prod"})
+    assert isinstance(p_mem, GetPromptResult)
+    first_msg = p_mem.messages[0].content
+    assert isinstance(first_msg, TextContent)
+    assert "prod" in first_msg.text
+    assert "INFO memory" in first_msg.text
+
+    # 2. 验证 Resources 与 Resource Templates 挂载
+    resources = await app.list_resources()
+    resource_uris = {str(r.uri) for r in resources}
+    assert "redis://info" in resource_uris
+    assert "redis://slowlog" in resource_uris
+
+    templates = await app.list_resource_templates()
+    template_uris = {t.uri_template for t in templates}
+    assert "redis://{connection}/info" in template_uris
+    assert "redis://{connection}/slowlog" in template_uris
 
 
 def test_create_app_sets_server_version() -> None:
@@ -63,7 +93,7 @@ async def test_end_to_end_mcp_call_tool() -> None:
 
     # 2. 验证只读模式下调用写命令受安全门禁拦截
     with pytest.raises(UnexpectedToolError):
-        await app.call_tool("redis_command", {"command": "SET test_key val"})
+        await app.call_tool("redis_execute_command", {"command": "SET test_key val"})
 
 
 def test_build_argument_parser_defaults() -> None:

@@ -7,6 +7,7 @@
 @since 2026-10-04
 """
 
+import asyncio
 import logging
 from typing import Any, Final
 
@@ -52,6 +53,26 @@ def _make_empty_inspect_result(key: str) -> dict[str, Any]:
     }
 
 
+async def _fetch_keys_metadata(client: Any, keys: list[str]) -> list[dict[str, Any]]:
+    """并发拉取键的基础数据类型与 TTL 元数据，避免串行网络开销。
+
+    @param client Redis 客户端对象（单机或集群驱动）
+    @param keys 待探查键名列表
+    @return 结构化元数据字典列表
+    """
+
+    async def _fetch_single(k: str) -> dict[str, Any]:
+        try:
+            raw_type, ttl = await asyncio.gather(client.type(k), client.ttl(k))
+            type_name = raw_type.decode("utf-8") if isinstance(raw_type, bytes) else str(raw_type)
+            return {"key": k, "type": type_name, "ttl": ttl}
+        except (redis.exceptions.RedisError, OSError, ValueError) as exc:
+            logger.debug("获取键 '%s' 元数据降级: %s", k, exc)
+            return {"key": k, "type": "unknown", "ttl": -2}
+
+    return list(await asyncio.gather(*[_fetch_single(k) for k in keys]))
+
+
 async def redis_scan_keys(
     registry: ConnectionRegistry,
     pattern: str = "*",
@@ -59,11 +80,13 @@ async def redis_scan_keys(
     type: str | None = None,
     connection: str | None = None,
     db: int | None = None,
+    include_meta: bool = False,
 ) -> dict[str, Any]:
     """使用非阻塞式聚合扫描器检索匹配的键名列表。
 
     服务内部自动循环调度游标并累积匹配键，对外屏蔽游标轮询复杂度，
     单次强制限制最多返回 200 条，防范大规模数据撑爆上下文。
+    若开启 include_meta=True，将并行拉取每个键的 type 与 ttl 元数据，终结 N+1 交互。
 
     @param registry 连接注册中心实例
     @param pattern 键名匹配模式通配符（支持 *、? 等，默认 '*'）
@@ -71,7 +94,8 @@ async def redis_scan_keys(
     @param type 目标键类型过滤（支持 string/hash/list/set/zset/stream，可选）
     @param connection 目标连接别名（可选，缺省为默认连接）
     @param db 目标数据库编号（可选，0~15）
-    @return 包含匹配键列表、总数及截断状态的字典
+    @param include_meta 是否在单次往返中并发附加键类型与 TTL 元数据（默认 False）
+    @return 包含匹配键列表、总数、截断状态及可选 entries 元数据字典
     @throws ValueError 传入不支持的键类型时抛出
     """
     effective_limit = min(max(limit, 1), MAX_SCAN_LIMIT) if limit > 0 else DEFAULT_SCAN_LIMIT
@@ -113,7 +137,7 @@ async def redis_scan_keys(
         truncated = len(accumulated_keys) > effective_limit
         final_keys = accumulated_keys[:effective_limit]
 
-        return {
+        result_payload: dict[str, Any] = {
             "keys": final_keys,
             "count": len(final_keys),
             "pattern": pattern,
@@ -121,6 +145,12 @@ async def redis_scan_keys(
             "cursor": 0,
             "is_truncated": truncated,
         }
+        if include_meta:
+            result_payload["entries"] = (
+                await _fetch_keys_metadata(client, final_keys) if final_keys else []
+            )
+
+        return result_payload
 
     # 2. 单机模式：通过游标循环非阻塞聚合扫描
     cursor: int = 0
@@ -162,7 +192,7 @@ async def redis_scan_keys(
     truncated = len(accumulated_keys) > effective_limit or cursor != 0
     final_keys = accumulated_keys[:effective_limit]
 
-    return {
+    result_payload = {
         "keys": final_keys,
         "count": len(final_keys),
         "pattern": pattern,
@@ -170,9 +200,15 @@ async def redis_scan_keys(
         "cursor": cursor,
         "is_truncated": truncated,
     }
+    if include_meta:
+        result_payload["entries"] = (
+            await _fetch_keys_metadata(client, final_keys) if final_keys else []
+        )
+
+    return result_payload
 
 
-async def redis_key_inspect(
+async def redis_inspect_key(
     registry: ConnectionRegistry,
     key: str,
     connection: str | None = None,
@@ -233,6 +269,10 @@ async def redis_key_inspect(
     }
 
 
+# 库内向后兼容别名
+redis_key_inspect = redis_inspect_key
+
+
 def register_key_tools(server: Any, registry: ConnectionRegistry) -> None:
     """将键检索与诊断相关工具挂载注册至 MCP 服务端。
 
@@ -247,8 +287,20 @@ def register_key_tools(server: Any, registry: ConnectionRegistry) -> None:
         type: str | None = None,
         connection: str | None = None,
         db: int | None = None,
+        include_meta: bool = False,
     ) -> dict[str, Any]:
-        """使用非阻塞式聚合扫描器检索匹配的键名列表，自动处理底层游标分页。"""
+        """使用非阻塞式聚合扫描器检索匹配的键名列表，自动处理底层游标分页。
+
+        可选择传入 include_meta=True 一次性并发拉取各键的类型与 TTL 元数据，避免 N+1 往返。
+
+        Args:
+            pattern: 键名匹配模式通配符（默认 '*'）
+            limit: 最大返回条数（默认 50，硬上限 200）
+            type: 目标键类型过滤（支持 string/hash/list/set/zset/stream，可选）
+            connection: 目标连接别名（可选，缺省为默认连接）
+            db: 目标数据库编号（可选，0~15）
+            include_meta: 是否在单次调用中并发附加 type 与 ttl 元数据（默认 False）
+        """
         return await redis_scan_keys(
             registry,
             pattern=pattern,
@@ -256,13 +308,14 @@ def register_key_tools(server: Any, registry: ConnectionRegistry) -> None:
             type=type,
             connection=connection,
             db=db,
+            include_meta=include_meta,
         )
 
-    @server.tool(name="redis_key_inspect")  # type: ignore[untyped-decorator]
-    async def _tool_key_inspect(
+    @server.tool(name="redis_inspect_key")  # type: ignore[untyped-decorator]
+    async def _tool_inspect_key(
         key: str,
         connection: str | None = None,
         db: int | None = None,
     ) -> dict[str, Any]:
         """单键多维诊断工具：聚合获取类型、TTL、内存占用与编码结构。"""
-        return await redis_key_inspect(registry, key=key, connection=connection, db=db)
+        return await redis_inspect_key(registry, key=key, connection=connection, db=db)

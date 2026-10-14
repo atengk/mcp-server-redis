@@ -229,8 +229,40 @@ async def test_register_key_tools_with_server(
 
     tools = await server.list_tools()
     tool_names = [t.name for t in tools]
-    assert set(tool_names) == {"redis_scan_keys", "redis_key_inspect"}
+    assert set(tool_names) == {"redis_scan_keys", "redis_inspect_key"}
     assert len(tool_names) == 2
+
+
+@pytest.mark.asyncio
+async def test_redis_scan_keys_with_include_meta(
+    sample_registry: ConnectionRegistry,
+) -> None:
+    """验证 redis_scan_keys 开启 include_meta=True 时并发附加 type 与 ttl 元数据且保留 keys 列表。"""
+    mock_client = AsyncMock()
+    mock_client.scan = AsyncMock(return_value=(0, [b"user:1001", b"user:1002"]))
+
+    async def _mock_type(k: str) -> bytes:
+        return b"string" if "1001" in k else b"hash"
+
+    async def _mock_ttl(k: str) -> int:
+        return 3600 if "1001" in k else -1
+
+    mock_client.type = _mock_type
+    mock_client.ttl = _mock_ttl
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        # 1. 默认 include_meta=False
+        res_default = await redis_scan_keys(sample_registry, pattern="user:*", include_meta=False)
+        assert res_default["keys"] == ["user:1001", "user:1002"]
+        assert "entries" not in res_default
+
+        # 2. 开启 include_meta=True
+        res_meta = await redis_scan_keys(sample_registry, pattern="user:*", include_meta=True)
+        assert res_meta["keys"] == ["user:1001", "user:1002"]
+        assert "entries" in res_meta
+        assert len(res_meta["entries"]) == 2
+        assert res_meta["entries"][0] == {"key": "user:1001", "type": "string", "ttl": 3600}
+        assert res_meta["entries"][1] == {"key": "user:1002", "type": "hash", "ttl": -1}
 
 
 @pytest.mark.asyncio

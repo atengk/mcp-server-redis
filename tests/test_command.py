@@ -19,7 +19,11 @@ from mcp_server_redis.core.guard import (
     ReadOnlyModeError,
     SecurityGuard,
 )
-from mcp_server_redis.tools.command import redis_command, register_command_tools
+from mcp_server_redis.tools.command import (
+    redis_command,
+    redis_execute_command,
+    register_command_tools,
+)
 
 
 @pytest.fixture
@@ -358,7 +362,7 @@ def test_register_command_tools_registers_redis_command(
     mock_server = MagicMock()
     register_command_tools(mock_server, sample_registry)
 
-    mock_server.tool.assert_called_once_with(name="redis_command")
+    mock_server.tool.assert_called_once_with(name="redis_execute_command")
 
 
 @pytest.mark.asyncio
@@ -375,7 +379,7 @@ async def test_fastmcp_call_tool_redis_command_protocol_seams(
     with patch.object(sample_registry, "get_client", return_value=mock_client):
         # 1. 协议级只读调度 (PING)
         mock_client.execute_command = AsyncMock(return_value="PONG")
-        res_ping = await app.call_tool("redis_command", {"command": "PING"})
+        res_ping = await app.call_tool("redis_execute_command", {"command": "PING"})
         assert isinstance(res_ping, CallToolResult)
         assert not res_ping.is_error
         assert res_ping.structured_content["result"] == "PONG"
@@ -383,16 +387,54 @@ async def test_fastmcp_call_tool_redis_command_protocol_seams(
 
         # 2. 协议级写命令调度 (SET)
         mock_client.execute_command = AsyncMock(return_value="OK")
-        res_set = await app.call_tool("redis_command", {"command": 'SET message "welcome to mcp"'})
+        res_set = await app.call_tool(
+            "redis_execute_command", {"command": 'SET message "welcome to mcp"'}
+        )
         assert isinstance(res_set, CallToolResult)
         assert not res_set.is_error
         assert res_set.structured_content is not None
         assert res_set.structured_content["result"] == "OK"
 
         # 3. 协议级 DEL 未确认拦截
-        res_del = await app.call_tool("redis_command", {"command": "DEL k1 k2"})
+        res_del = await app.call_tool("redis_execute_command", {"command": "DEL k1 k2"})
         assert isinstance(res_del, CallToolResult)
         assert not res_del.is_error
         assert res_del.structured_content is not None
         assert res_del.structured_content["status"] == "confirmation_required"
         assert res_del.structured_content["keys"] == ["k1", "k2"]
+
+
+@pytest.mark.asyncio
+async def test_redis_execute_command_info_parsing(
+    sample_registry: ConnectionRegistry,
+) -> None:
+    """验证 redis_execute_command 执行 INFO 命令时自动解析为结构化紧凑字典。"""
+    raw_info = (
+        b"# Server\r\n"
+        b"redis_version:7.2.4\r\n"
+        b"uptime_in_seconds:86400\r\n"
+        b"# Memory\r\n"
+        b"used_memory:2097152\r\n"
+        b"used_memory_human:2.00M\r\n"
+        b"mem_fragmentation_ratio:1.25\r\n"
+    )
+    mock_client = AsyncMock()
+    mock_client.execute_command = AsyncMock(return_value=raw_info)
+
+    with patch.object(sample_registry, "get_client", return_value=mock_client):
+        # 全局 INFO
+        res_all = await redis_execute_command(sample_registry, command="INFO")
+        assert res_all["data_type"] == "dict"
+        assert isinstance(res_all["result"], dict)
+        assert "server" in res_all["result"]
+        assert "memory" in res_all["result"]
+        assert res_all["result"]["server"]["redis_version"] == "7.2.4"
+        assert res_all["result"]["server"]["uptime_in_seconds"] == 86400
+        assert res_all["result"]["memory"]["used_memory"] == 2097152
+        assert res_all["result"]["memory"]["mem_fragmentation_ratio"] == 1.25
+
+        # 单分节 INFO memory
+        res_mem = await redis_execute_command(sample_registry, command="INFO memory")
+        assert res_mem["data_type"] == "dict"
+        assert res_mem["result"]["used_memory"] == 2097152
+        assert res_mem["result"]["used_memory_human"] == "2.00M"

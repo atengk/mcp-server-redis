@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 _default_guard = SecurityGuard(allow_write=False)
 
 
-async def redis_command(
+async def redis_execute_command(
     registry: ConnectionRegistry,
     command: str,
     guard: SecurityGuard | None = None,
@@ -113,6 +113,10 @@ async def redis_command(
     return serialized.to_dict()
 
 
+# 库内向后兼容别名
+redis_command = redis_execute_command
+
+
 def register_command_tools(
     server: Any,
     registry: ConnectionRegistry,
@@ -127,8 +131,8 @@ def register_command_tools(
     """
     active_guard = guard or _default_guard
 
-    @server.tool(name="redis_command")  # type: ignore[untyped-decorator]
-    async def _tool_command(
+    @server.tool(name="redis_execute_command")  # type: ignore[untyped-decorator]
+    async def _tool_execute_command(
         command: str,
         connection: str | None = None,
         db: int | None = None,
@@ -149,7 +153,7 @@ def register_command_tools(
         Returns:
             dict[str, Any]: 统一信封结果字典，包含 command, result, data_type, is_truncated 等元数据
         """
-        return await redis_command(
+        return await redis_execute_command(
             registry=registry,
             command=command,
             guard=active_guard,

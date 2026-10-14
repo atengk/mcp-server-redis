@@ -29,4 +29,6 @@
 | [ADR-0008](./0008-docker-and-dual-transport-architecture.md) | 生产级容器化构建策略与常驻 SSE 双模传输网关架构 | 已采纳 | 2026-10-04 |
 | [ADR-0009](./0009-oss-engineering-template-integration.md) | 开源工程化模版集成与现代自动化流水线架构 | 已采纳 | 2026-10-04 |
 | [ADR-0010](./0010-hybrid-command-gateway-architecture.md) | 混合命令网关架构与协议工具精简设计 | 已采纳 | 2026-10-12 |
+| [ADR-0011](./0011-canonical-naming-and-full-mcp-protocol.md) | 规范动宾工具契约、无别名纯净暴露与全 MCP 协议矩阵 | 已采纳 | 2026-10-14 |
+
 

@@ -25,8 +25,10 @@ SERVER_VERSION: Final[str] = "2.0.0"
 from mcp_server_redis.core.connection import ConnectionRegistry
 from mcp_server_redis.core.env import ServerConfig, resolve_server_configuration
 from mcp_server_redis.core.guard import SecurityGuard
+from mcp_server_redis.prompts import register_prompts
+from mcp_server_redis.resources import register_resources
 from mcp_server_redis.tools.command import register_command_tools
-from mcp_server_redis.tools.instances import register_instance_tools
+from mcp_server_redis.tools.connections import register_connection_tools
 from mcp_server_redis.tools.keys import register_key_tools
 
 logger = logging.getLogger("mcp_server_redis")
@@ -172,10 +174,14 @@ def create_app(
         lifespan=app_lifespan,
     )
 
-    # 4. 装配挂载核心 4 个 MCP 工具 (v2.0 混合命令网关模式)
+    # 4. 装配挂载核心 4 个规范动宾 MCP 工具
     register_command_tools(app, registry, guard=guard)
-    register_instance_tools(app, registry)
+    register_connection_tools(app, registry)
     register_key_tools(app, registry)
+
+    # 5. 装配挂载 MCP 只读快照资源 (Resources) 与诊断引导提示词 (Prompts)
+    register_resources(app, registry)
+    register_prompts(app)
 
     return app
 
