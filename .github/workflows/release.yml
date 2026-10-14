@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: 检出源码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装 uv
         uses: astral-sh/setup-uv@v5
@@ -67,7 +67,7 @@ jobs:
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
     steps:
       - name: 检出源码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -141,7 +141,7 @@ jobs:
       contents: write
     steps:
       - name: 检出源码 (全量历史供日志生成)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -215,7 +215,7 @@ jobs:
       packages: write
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 设置 QEMU 模拟器（多架构支持）
         uses: docker/setup-qemu-action@v3
