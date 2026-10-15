@@ -1,7 +1,7 @@
 # ==============================================================================
 # 阶段 1: 构建依赖与虚拟环境 (Builder)
 # ==============================================================================
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 
 # 从官方极速镜像复制预编译 uv 工具
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ==============================================================================
 # 阶段 2: 生产运行阶段 (Runtime)
 # ==============================================================================
-FROM python:3.11-slim AS runtime
+FROM python:3.12-slim AS runtime
 
 # 运行时安全防护与环境配置
 ENV PYTHONUNBUFFERED=1 \
