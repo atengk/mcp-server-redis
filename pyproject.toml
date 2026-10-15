@@ -1,6 +1,6 @@
 [project]
 name = "atengk-mcp-server-redis"
-version = "2.1.0"
+version = "2.2.0"
 description = "基于 Python 与 FastMCP 构建的高性能 Redis 模型上下文协议（MCP）服务。专为大语言模型提供混合命令执行网关、双重写门禁、键值检索、单键多维诊断与大集合防 OOM 截断能力。"
 readme = "README.md"
 requires-python = ">=3.10"

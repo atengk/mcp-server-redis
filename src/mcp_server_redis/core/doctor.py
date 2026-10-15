@@ -29,7 +29,7 @@ from mcp_server_redis.core.env import ServerConfig
 logger = logging.getLogger(__name__)
 
 # 服务端版本号常量
-SERVER_VERSION: Final[str] = "2.1.0"
+SERVER_VERSION: Final[str] = "2.2.0"
 
 DoctorCheckStatus = Literal["ok", "warn", "fail"]
 
@@ -137,7 +137,10 @@ class DoctorRunner:
         # 2. 维度二：配置文件与环境变量校验
         registry = self._check_configuration(report)
 
-        # 3. 维度三 & 维度四：Redis 实例网络连通性与读写门禁探测
+        # 3. 维度三：传输协议与 HTTP 传输安全门禁审计
+        self._check_transport_security(report)
+
+        # 4. 维度四 & 维度五：Redis 实例网络连通性与读写门禁探测
         if registry is not None:
             try:
                 await self._check_connections_and_permissions(registry, report)
@@ -295,6 +298,75 @@ class DoctorRunner:
                 )
             )
             return None
+
+    def _check_transport_security(self, report: DoctorReport) -> None:
+        """检测传输协议与 HTTP 传输安全门禁配置。"""
+        transport = self.server_config.transport
+        if transport == "stdio":
+            report.items.append(
+                DoctorCheckItem(
+                    category="Security",
+                    name="传输协议安全",
+                    status="ok",
+                    message="当前处于 Stdio 标准输入输出管道模式（本地进程隔离，天然免疫网络嗅探与跨源攻击）",
+                    details={"transport": "stdio"},
+                )
+            )
+            return
+
+        # HTTP 模式（sse 或 streamable-http）
+        details: dict[str, Any] = {
+            "transport": transport,
+            "host": self.server_config.host,
+            "port": self.server_config.port,
+            "allowed_hosts": list(self.server_config.allowed_hosts),
+        }
+
+        is_wildcard = self.server_config.host in ("0.0.0.0", "::")
+        token = self.server_config.auth_token
+
+        if is_wildcard and not token:
+            report.items.append(
+                DoctorCheckItem(
+                    category="Security",
+                    name="HTTP 传输网关安全",
+                    status="warn",
+                    message=f"服务监听绑定于全网地址 '{self.server_config.host}' 但未配置 --auth-token，建议显式配置访问凭据并在生产环境反向代理终结 TLS",
+                    details=details,
+                )
+            )
+        elif token:
+            token_len = len(token)
+            if token_len < 16:
+                report.items.append(
+                    DoctorCheckItem(
+                        category="Security",
+                        name="HTTP 传输鉴权凭据",
+                        status="warn",
+                        message=f"已配置 --auth-token，但凭据长度为 {token_len} 字符（低于推荐的 16 字符安全基线，存在字典爆破风险）",
+                        details={"token_length": token_len, **details},
+                    )
+                )
+            else:
+                report.items.append(
+                    DoctorCheckItem(
+                        category="Security",
+                        name="HTTP 传输鉴权凭据",
+                        status="ok",
+                        message=f"已配置 --auth-token 访问凭据门禁 (长度: {token_len} 字符，满足复杂度基线)",
+                        details={"token_length": token_len, **details},
+                    )
+                )
+        else:
+            report.items.append(
+                DoctorCheckItem(
+                    category="Security",
+                    name="HTTP 传输网关安全",
+                    status="ok",
+                    message=f"服务监听于本地安全回环地址 '{self.server_config.host}' (DNS 重绑定防御已启用)",
+                    details=details,
+                )
+            )
 
     async def _check_connections_and_permissions(
         self,

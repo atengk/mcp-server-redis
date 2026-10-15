@@ -28,11 +28,11 @@ _VALID_LOG_LEVELS: Final[frozenset[str]] = frozenset({"DEBUG", "INFO", "WARNING"
 _DEFAULT_LOG_LEVEL: Final[str] = "INFO"
 
 # 允许的有效传输协议集合
-_VALID_TRANSPORTS: Final[frozenset[str]] = frozenset({"stdio", "sse"})
+_VALID_TRANSPORTS: Final[frozenset[str]] = frozenset({"stdio", "sse", "streamable-http"})
 # 默认传输协议保底值
 _DEFAULT_TRANSPORT: Final[str] = "stdio"
-# 默认服务绑定主机保底值
-_DEFAULT_SERVER_HOST: Final[str] = "0.0.0.0"
+# 默认服务绑定主机保底值（安全默认原则：收敛监听本地回环地址）
+_DEFAULT_SERVER_HOST: Final[str] = "127.0.0.1"
 # 默认服务监听端口保底值
 _DEFAULT_SERVER_PORT: Final[int] = 8000
 # 默认 Socket 连接超时保底值（秒）
@@ -261,10 +261,10 @@ def normalize_transport(
 def resolve_transport_from_env() -> str:
     """从环境变量解析传输协议。
 
-    读取 `MCP_REDIS_TRANSPORT` 环境变量，支持 stdio、sse（大小写不敏感）。
+    读取 `MCP_REDIS_TRANSPORT` 环境变量，支持 stdio、sse、streamable-http（大小写不敏感）。
     若变量未设置或取值非法，安全保底返回默认值 "stdio"。
 
-    @return 归一化后的传输协议字符串（"stdio" 或 "sse"）
+    @return 归一化后的传输协议字符串（"stdio"、"sse" 或 "streamable-http"）
     """
     return normalize_transport(os.getenv("MCP_REDIS_TRANSPORT"))
 
@@ -273,7 +273,7 @@ def resolve_server_host_from_env() -> str:
     """从环境变量解析服务绑定主机地址。
 
     读取 `MCP_REDIS_SERVER_HOST` 环境变量。
-    若变量未设置，安全保底返回 "0.0.0.0"。
+    若变量未设置，安全保底返回 "127.0.0.1"。
 
     @return 服务监听主机地址
     """
@@ -427,6 +427,31 @@ def resolve_server_instructions_from_env() -> str | None:
     return _DEFAULT_SERVER_INSTRUCTIONS
 
 
+def resolve_auth_token_from_env() -> str | None:
+    """从环境变量解析 HTTP 传输层轻量访问认证凭据 (Token)。
+
+    读取 `MCP_REDIS_AUTH_TOKEN` 环境变量。
+
+    @return 认证凭据字符串，未配置或为空白字符串时返回 None
+    """
+    val = os.getenv("MCP_REDIS_AUTH_TOKEN")
+    return val.strip() if val and val.strip() else None
+
+
+def resolve_allowed_hosts_from_env() -> tuple[str, ...]:
+    """从环境变量解析 HTTP 传输层允许的主机标头 (Host) 白名单。
+
+    读取 `MCP_REDIS_ALLOWED_HOSTS` 环境变量，支持逗号分隔的多主机规则（如 "api.example.com,*.internal.net"）。
+
+    @return 解析并去重过滤后的允许主机元组
+    """
+    val = os.getenv("MCP_REDIS_ALLOWED_HOSTS")
+    if not val:
+        return ()
+    hosts = [h.strip() for h in val.split(",") if h.strip()]
+    return tuple(dict.fromkeys(hosts))
+
+
 class ServerConfig(NamedTuple):
     """服务端运行时生效配置对象。
 
@@ -438,9 +463,9 @@ class ServerConfig(NamedTuple):
     @property config 生效的多实例配置文件路径（或 None）
     @property allow_write 是否开启写权限
     @property log_level 生效的日志级别（如 "INFO", "DEBUG" 等）
-    @property transport 生效的传输协议（"stdio" 或 "sse"）
-    @property host SSE 监听地址（默认 "0.0.0.0"）
-    @property port SSE 监听端口（默认 8000）
+    @property transport 生效的传输协议（"stdio"、"sse" 或 "streamable-http"）
+    @property host HTTP 服务监听地址（默认 "127.0.0.1"）
+    @property port HTTP 服务监听端口（默认 8000）
     @property is_cluster 是否开启 Redis Cluster 集群模式（默认 False）
     @property max_connections 单连接池最大连接数（默认 50）
     @property socket_connect_timeout 连接超时秒数（默认 5.0）
@@ -449,6 +474,8 @@ class ServerConfig(NamedTuple):
     @property max_unbounded_read_items 高危无界读取最大安全阈值（默认 2000）
     @property server_name MCP 服务实例名称（默认 "mcp-server-redis"）
     @property server_instructions 系统级大模型指导指令
+    @property auth_token HTTP 传输层访问鉴权令牌（Bearer / URL Token）
+    @property allowed_hosts HTTP 传输层允许的主机标头 (Host) 白名单元组
     """
 
     url: str
@@ -466,6 +493,8 @@ class ServerConfig(NamedTuple):
     max_unbounded_read_items: int = _DEFAULT_MAX_UNBOUNDED_READ_ITEMS
     server_name: str = _DEFAULT_SERVER_NAME
     server_instructions: str | None = None
+    auth_token: str | None = None
+    allowed_hosts: tuple[str, ...] = ()
 
 
 def resolve_server_configuration(
@@ -484,6 +513,8 @@ def resolve_server_configuration(
     cli_max_unbounded_read_items: int | None = None,
     cli_server_name: str | None = None,
     cli_server_instructions: str | None = None,
+    cli_auth_token: str | None = None,
+    cli_allowed_hosts: str | tuple[str, ...] | list[str] | None = None,
 ) -> ServerConfig:
     """统一决议服务端最终启动配置参数。
 
@@ -505,6 +536,8 @@ def resolve_server_configuration(
     @param cli_max_unbounded_read_items CLI 传入的无界读取阈值（可选）
     @param cli_server_name CLI 传入的 MCP 服务名称（可选）
     @param cli_server_instructions CLI 传入的系统级指导指令（可选）
+    @param cli_auth_token CLI 传入的 HTTP 鉴权访问凭据（可选）
+    @param cli_allowed_hosts CLI 传入的允许 Host 白名单（可选，字符串逗号分隔或列表）
     @return ServerConfig 命名元组
     """
     # 1. 尝试探测并安全载入 .env 文件
@@ -597,6 +630,21 @@ def resolve_server_configuration(
         else resolve_server_instructions_from_env()
     )
 
+    # 14. 决议生效 HTTP 认证令牌与 Host 白名单（CLI > 环境变量）
+    effective_auth_token = (
+        cli_auth_token.strip()
+        if cli_auth_token and cli_auth_token.strip()
+        else resolve_auth_token_from_env()
+    )
+    if cli_allowed_hosts is not None:
+        if isinstance(cli_allowed_hosts, str):
+            parsed_hosts = [h.strip() for h in cli_allowed_hosts.split(",") if h.strip()]
+            effective_allowed_hosts = tuple(dict.fromkeys(parsed_hosts))
+        else:
+            effective_allowed_hosts = tuple(dict.fromkeys(cli_allowed_hosts))
+    else:
+        effective_allowed_hosts = resolve_allowed_hosts_from_env()
+
     return ServerConfig(
         url=effective_url,
         config=effective_config,
@@ -613,4 +661,6 @@ def resolve_server_configuration(
         max_unbounded_read_items=effective_max_unbounded,
         server_name=effective_server_name,
         server_instructions=effective_server_instructions,
+        auth_token=effective_auth_token,
+        allowed_hosts=effective_allowed_hosts,
     )

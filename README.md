@@ -617,44 +617,113 @@ uvx atengk-mcp-server-redis --url "redis://10.0.0.1:6379" --cluster --allow-writ
 
 ---
 
-## 🚀 Stdio 与 SSE 双模传输网关
+## 🚀 Stdio、SSE 与 Streamable-HTTP 全模传输网关
 
-本服务在应用层抽象了双模传输网关架构，一套代码兼顾本地终端进程间通信与分布式微服务网络暴露：
+本服务在应用层抽象了全模传输网关架构，一套代码兼顾本地终端进程间通信与分布式微服务网络暴露：
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │       atengk-mcp-server-redis           │
-                    │         (FastMCP 核心服务层)            │
-                    └───────────┬─────────────────┬───────────┘
-                                │                 │
-               (默认模式)       │                 │  (--transport sse)
-                                ▼                 ▼
-                    ┌──────────────────┐   ┌──────────────────┐
-                    │  标准 Stdio 管道  │   │  HTTP SSE 网关   │
-                    │  (JSON-RPC 流)   │   │  (:8000/sse 端点)│
-                    └─────────┬────────┘   └─────────┬────────┘
-                                │                      │
-                                ▼                      ▼
-                     本地大模型客户端        远程 AI 网关 / 云原生微服务
-                     (Claude/Cursor/Cline)   (Web 客户端 / 局域网协同)
+                    ┌────────────────────────────────────────────────────────┐
+                    │               atengk-mcp-server-redis                  │
+                    │                 (FastMCP 核心服务层)                   │
+                    └───────────┬─────────────────┬──────────────────┬───────┘
+                                │                 │                  │
+               (默认模式)       │                 │ (--transport sse)│ (--transport streamable-http)
+                                ▼                 ▼                  ▼
+                    ┌──────────────────┐  ┌──────────────────┐ ┌────────────────────┐
+                    │  标准 Stdio 管道  │  │   HTTP SSE 网关  │ │Streamable-HTTP 网关│
+                    │  (JSON-RPC 流)   │  │  (:8000/sse 端点) │ │   (:8000/mcp 端点)  │
+                    └─────────┬────────┘  └─────────┬────────┘ └─────────┬──────────┘
+                                │                   │                    │
+                                ▼                   ▼                    ▼
+                     本地大模型客户端       远程 Web AI 网关      现代微服务 / 云原生集成
+                     (Claude/Cursor/Cline)  (浏览器/反代接入)     (高性能流式低延迟 RPC)
 ```
 
 1. **标准 Stdio 管道模式（默认）**：
    - 默认模式，日志严格绑定至 `sys.stderr`，绝不污染 stdout 协议流，100% 严格向后兼容所有现有客户端配置；
 2. **HTTP Server-Sent Events (SSE) 服务端模式**：
-   - 通过 `--transport sse`（或 `MCP_REDIS_TRANSPORT=sse`）激活；
-   - 支持 `--host`（默认 `0.0.0.0`）与 `--port`（默认 `8000`）自定义监听绑定；
-3. **云原生健康探活路由 (`/health` 与 `/healthz`)**：
-   - 在 SSE 模式下，服务端自动挂载 `/health` 与 `/healthz` HTTP GET 探活端点；
+   - 通过 `--transport sse`（或 `MCP_REDIS_TRANSPORT=sse`）激活，端点监听于 `/sse` 与 `/messages/`；
+3. **Streamable-HTTP 流式 HTTP 模式**：
+   - 通过 `--transport streamable-http`（或 `MCP_REDIS_TRANSPORT=streamable-http`）激活，默认端点监听于 `/mcp`，支持高吞吐双向流式通信；
+4. **HTTP 传输安全与访问令牌门禁 (`--auth-token`)**：
+   - 在 HTTP 网关暴露于公网或跨节点网络时，推荐通过 `--auth-token`（或 `MCP_REDIS_AUTH_TOKEN`）配置轻量认证凭据（推荐 $\ge 16$ 字符高熵字符串，受 `--doctor` 复杂度审计）；
+   - 支持标准 HTTP 标头 `Authorization: Bearer <token>` 与 URL 查询参数 `?token=<token>`，未授权请求直接拦截返回 HTTP 401 JSON；
+   - **CORS 预检豁免**：鉴权中间件自动无感放行 HTTP `OPTIONS` 跨源预检请求，杜绝浏览器跨源协商因未携带 Header 被误拒。
+5. **DNS 重绑定与跨源攻击防御 (`--allowed-hosts`)**：
+   - 遵循 **安全默认原则 (Safe-by-Default)**，默认监听绑定于本地回环地址 `127.0.0.1`；
+   - 底层强制启用 `TransportSecuritySettings` 校验 Host 标头与 Origin，防止恶意外网页面通过浏览器发起跨源伪造攻击；
+   - 容器或远程部署绑定 `--host 0.0.0.0` 时，可通过 `--allowed-hosts`（或 `MCP_REDIS_ALLOWED_HOSTS`，逗号切分）精确声明反向代理域名（如 `mcp.example.com`）；
+   - **生产环境最佳实践**：公网环境下强烈建议通过 Nginx / Caddy / Envoy 反向代理终结 TLS（HTTPS/WSS），并在私有 VPC 或内网安全组中隔离 Redis 服务端。
+6. **云原生健康探活路由与防击穿缓存 (`/health` 与 `/healthz`)**：
+   - 在任何 HTTP 模式（SSE 或 Streamable-HTTP）下，服务端自动挂载 `/health` 与 `/healthz` HTTP GET 探活端点（豁免鉴权）；
+   - 内置 **2.0 秒内存短时状态缓存与并发双检锁**：在抵御公网与高频监控探活时避免频繁冲击底层 Redis 造成连接池耗尽；
    - 结合底层 Redis `PING` 探活与 1.0 秒保底超时，精准适配 Kubernetes Liveness / Readiness 探针及负载均衡健康切流：
-     - **健康正常 (HTTP 200)**：`{"status": "healthy", "version": "2.1.0", "redis": "ok"}`
-     - **连接异常 (HTTP 503)**：`{"status": "unhealthy", "version": "2.1.0", "redis": "error", "error": "..."}`
+     - **健康正常 (HTTP 200)**：`{"status": "healthy", "version": "2.2.0", "redis": "ok"}`
+     - **连接异常 (HTTP 503)**：`{"status": "unhealthy", "version": "2.2.0", "redis": "error", "error": "..."}`
+7. **生产反向代理加固与 Nginx 配置样例 (TLS 终结、流式无缓冲与 URL 日志脱敏)**：
+   - 针对浏览器原生 `EventSource` 必须依赖 `?token=...` 的场景，反向代理应在落盘访问日志前自动对敏感凭据掩码，防止日志中心泄密；
+   - 针对 SSE 与 Streamable-HTTP 必须关闭代理缓冲（`proxy_buffering off`），并保持长超时连接。
+
+```nginx
+# Nginx 生产加固配置参考 (TLS 终结 + 流式无缓冲 + Token 访问日志脱敏)
+http {
+    # 提取并脱敏 URL 中的 token 查询参数
+    map $args $loggable_args {
+        "~(.*)(?:token|auth_token)=[^&]+(.*)"  "$1token=***$2";
+        default                                $args;
+    }
+
+    log_format masked_combined '$remote_addr - $remote_user [$time_local] '
+                               '"$request_method $uri?$loggable_args $server_protocol" '
+                               '$status $body_bytes_sent "$http_referer" '
+                               '"$http_user_agent"';
+
+    server {
+        listen 443 ssl http2;
+        server_name mcp.example.com;
+
+        ssl_certificate     /etc/ssl/certs/mcp.example.com.crt;
+        ssl_certificate_key /etc/ssl/private/mcp.example.com.key;
+        ssl_protocols       TLSv1.2 TLSv1.3;
+
+        # 采用脱敏格式输出访问日志
+        access_log /var/log/nginx/mcp_access.log masked_combined;
+
+        location / {
+            proxy_pass http://127.0.0.1:8000;
+
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Connection "";
+
+            # 关键：针对 SSE 与 Streamable-HTTP 关闭缓冲，确保分块流式实时直达
+            proxy_buffering off;
+            proxy_cache off;
+            chunked_transfer_encoding on;
+
+            # 保持长连接活跃，防止流式通道被中间网关闲置超时切断
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+
+        # 探活接口专用轻量路由
+        location /healthz {
+            proxy_pass http://127.0.0.1:8000/healthz;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+        }
+    }
+}
+```
 
 ```bash
-# 启动 HTTP SSE 网关监听于 0.0.0.0:8000
-uvx atengk-mcp-server-redis --transport sse --host 0.0.0.0 --port 8000
+# 启动 HTTP Streamable-HTTP 网关，配置安全访问令牌并仅允许特定域名访问
+uvx atengk-mcp-server-redis --transport streamable-http --host 0.0.0.0 --port 8000 --auth-token "YOUR_SECRET_TOKEN" --allowed-hosts "mcp.example.com"
 
-# 验证云原生探活健康检查
+# 验证云原生探活健康检查 (无需 Token 自动放行，具备 2.0s 内存防击穿缓存)
 curl -i http://localhost:8000/healthz
 ```
 
@@ -676,13 +745,15 @@ curl -i http://localhost:8000/healthz
 | :--- | :--- | :--- | :--- |
 | `--allow-write` | `MCP_REDIS_ALLOW_WRITE` | `false` | 显式开启数据写权限。默认全局强只读，写操作受启动参数与连接 `readonly: false` 双重门禁管控 |
 | `--audit-log <target>` | `MCP_REDIS_AUDIT_LOG` | - | 结构化命令审计日志输出目标，支持 `'stderr'`、`'stdout'` 或具体文件路径（在 stdio 传输模式下自动重定向至 stderr 防协议污染） |
+| `--auth-token <token>` | `MCP_REDIS_AUTH_TOKEN` | - | HTTP 传输层鉴权访问凭据，拦截未授权访问（支持 `Authorization: Bearer <token>` 与 `?token=<token>`，豁免探活端点） |
 
 ### 3. 服务与网络传输 (Transport & Server)
 | 命令行参数 | 对应环境变量 | 默认值 | 作用与用法示例 |
 | :--- | :--- | :--- | :--- |
-| `--transport <stdio\|sse>` | `MCP_REDIS_TRANSPORT` | `stdio` | 传输协议模式。`stdio` 适合本地客户端（Claude Desktop/Cursor），`sse` 适合微服务与远程 Web AI 网关 |
-| `--host <ip>` | `MCP_REDIS_SERVER_HOST` | `0.0.0.0` | HTTP SSE 模式服务端监听绑定的主机 IP 地址 |
-| `--port <port>` | `MCP_REDIS_SERVER_PORT` | `8000` | HTTP SSE 模式服务端监听绑定的 HTTP 端口号 |
+| `--transport <stdio\|sse\|streamable-http>` | `MCP_REDIS_TRANSPORT` | `stdio` | 传输协议模式。`stdio` 适合本地客户端，`sse` 适合 Web AI 网关，`streamable-http` 适合现代化流式高并发微服务 RPC |
+| `--host <ip>` | `MCP_REDIS_SERVER_HOST` | `127.0.0.1` | HTTP 网关监听绑定的主机 IP 地址（安全默认监听本地回环，容器/远程可显式声明 `0.0.0.0`） |
+| `--port <port>` | `MCP_REDIS_SERVER_PORT` | `8000` | HTTP 网关服务端监听绑定的 HTTP 端口号 |
+| `--allowed-hosts <hosts>` | `MCP_REDIS_ALLOWED_HOSTS` | - | HTTP 传输层允许的主机标头白名单（逗号分隔多主机规则，防御 DNS 重绑定与跨源攻击） |
 | `--log-level <level>` | `MCP_REDIS_LOG_LEVEL` | `INFO` | 运行时日志级别，可选 `DEBUG`、`INFO`、`WARNING`、`ERROR`（日志一律输出至 stderr 杜绝污染） |
 | `--server-name <name>` | `MCP_REDIS_SERVER_NAME` | `mcp-server-redis` | MCP 协议握手层声明的服务实例名称，供宿主客户端区分多 MCP 服务实例（底层工具名保持物理稳定不变） |
 | `--server-instructions <text>` | `MCP_REDIS_SERVER_INSTRUCTIONS` | 内置指导 | 向大模型注入的全局系统级业务指导与拓扑边界说明 |
@@ -715,9 +786,9 @@ curl -i http://localhost:8000/healthz
 | 环境变量名 | 默认值 | 作用与用法示例 |
 | :--- | :--- | :--- |
 | `MCP_REDIS_CLUSTER` | `false` | 激活 Redis Cluster 分片集群模式。取值为 `true`、`1`、`yes`、`on` 时生效 |
-| `MCP_REDIS_TRANSPORT` | `stdio` | 传输协议模式。可选 `stdio` 或 `sse`（大小写不敏感） |
-| `MCP_REDIS_SERVER_HOST` | `0.0.0.0` | SSE 传输网关绑定的监听主机地址 |
-| `MCP_REDIS_SERVER_PORT` | `8000` | SSE 传输网关绑定的 HTTP 监听端口 |
+| `MCP_REDIS_TRANSPORT` | `stdio` | 传输协议模式。可选 `stdio`、`sse` 或 `streamable-http`（大小写不敏感） |
+| `MCP_REDIS_SERVER_HOST` | `127.0.0.1` | HTTP 网关绑定的监听主机地址（安全默认监听本地回环） |
+| `MCP_REDIS_SERVER_PORT` | `8000` | HTTP 网关绑定的 HTTP 监听端口 |
 | `MCP_REDIS_SERVER_NAME` | `mcp-server-redis` | MCP 协议服务实例名称标识（映射 `--server-name`） |
 | `MCP_REDIS_SERVER_INSTRUCTIONS` | 内置指导 | 向大模型注入的全局系统级业务指导指令（映射 `--server-instructions`） |
 
@@ -726,6 +797,8 @@ curl -i http://localhost:8000/healthz
 | :--- | :--- | :--- |
 | `MCP_REDIS_ALLOW_WRITE` | `false` | 正向显式授权写权限。值为 `true`、`1`、`yes`、`on` 时开启写操作 |
 | `MCP_REDIS_READ_ONLY` | `true` | 反向只读控制。显式设为 `false`、`0`、`no`、`off` 时解除只读并开启写权限 |
+| `MCP_REDIS_AUTH_TOKEN` | - | HTTP 传输层轻量访问认证凭据（支持 Bearer Token 与 URL 查询参数；映射 `--auth-token`） |
+| `MCP_REDIS_ALLOWED_HOSTS` | - | HTTP 传输层允许的主机标头白名单（逗号分隔多主机规则，防御 DNS 重绑定；映射 `--allowed-hosts`） |
 | `MCP_REDIS_LOG_LEVEL` | `INFO` | 运行时日志输出级别。支持 `DEBUG`、`INFO`、`WARNING`、`ERROR`（日志严格绑定至 stderr） |
 | `MCP_REDIS_CONNECT_TIMEOUT` | `5.0` | Socket 连接超时保底时间（秒），防止节点宕机网络挂死，亦支持别名 `MCP_REDIS_SOCKET_CONNECT_TIMEOUT` |
 | `MCP_REDIS_SOCKET_TIMEOUT` | `10.0` | Socket 指令执行超时保底时间（秒），亦支持别名 `MCP_REDIS_TIMEOUT` |

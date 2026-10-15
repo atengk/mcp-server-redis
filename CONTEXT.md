@@ -94,9 +94,25 @@ _避免使用_: 集群代理 (Cluster Proxy)、分片包装器 (Sharding Wrapper
 针对 Redis Cluster 分布式哈希槽分布施加的防御机制。在物理删除（`redis_delete_keys`）与探活阶段将多键批处理安全降级为基于 `asyncio.gather` 的并发单键独立请求，物理切断 `CROSSSLOT` 跨槽异常崩溃风险并杜绝串行网络 N+1 开销；在键检索阶段通过 `scan_iter` 遍历全部分片节点聚合键集合。  
 _避免使用_: 槽位重定向 (Slot Redirection)、跨槽补丁 (Cross-Slot Patch)
 
-**双模传输网关 (Dual Transport Gateway)**:
-在服务装配层建立的双协议传输抽象。默认以极简原生 Stdio 管道保证已有客户端配置的 100% 严格向后兼容，亦支持通过 `--transport sse`（及 `--host`、`--port`）切换为常驻 HTTP Server-Sent Events 服务端，满足微服务与远程大模型协作需求。  
-_避免使用_: 网络代理 (Network Proxy)、协议转换器 (Protocol Converter)
+**全模传输网关 (Multi-Transport Gateway)**:
+在服务装配层建立的三重协议传输抽象。默认以极简原生 Stdio 管道保证已有客户端配置的 100% 严格向后兼容，同时支持 `--transport sse`（Server-Sent Events）与 `--transport streamable-http`（流式 HTTP 全双工），满足微服务常驻、远程 AI 网关及轻量流式网络协同需求。  
+_避免使用_: 双模网关 (Dual Gateway)、网络代理 (Network Proxy)、协议转换器 (Protocol Converter)
+
+**流式 HTTP 传输 (Streamable HTTP Transport)**:
+MCP 官方新一代 HTTP 传输协议。基于单个 `/mcp` 端点提供全双工分块流式通信，彻底消除传统 SSE 模式下 `/sse` 与 `/messages/` 双端点维护复杂度与会话保持痛点。  
+_避免使用_: 单端点 HTTP (Single-Endpoint HTTP)、分块传输 (Chunked Transport)
+
+**传输凭据门禁 (Transport Auth Guard)**:
+在 HTTP 接入层实施的轻量级访问控制中间件。通过 `--auth-token` 或 `MCP_REDIS_AUTH_TOKEN` 声明，对所有非健康检查端点强制校验 `Authorization: Bearer <token>` 或查询参数 `?token=<token>`，未授权请求直接响应 HTTP 401。对健康检查端点（`/health*`）与浏览器跨源预检请求（`OPTIONS`）实施无感放行策略。  
+_避免使用_: 接口鉴权 (API Auth)、请求拦截器 (Request Interceptor)
+
+**探活防击穿缓存 (Health Probe Cache)**:
+在 HTTP 健康检查接入层实施的内存级短时状态缓存机制（默认 2.0 秒 TTL）。高频探活请求直接复用缓存快速返回，兼顾秒级故障感知与 Redis 零连接穿透风险。  
+_避免使用_: 探活节流 (Probe Throttling)、健康检查限流 (Health Rate Limit)
+
+**DNS 重绑定与跨源防御 (DNS Rebinding & Origin Guard)**:
+基于 MCP 原生 `TransportSecuritySettings` 施加的协议层网络安全防护。严格校验 HTTP 请求的 `Host` 与 `Origin` 标头（默认限制为 localhost 与绑定主机），物理切断恶意网页利用浏览器发起的 DNS 重绑定跨源渗透与 CSRF 攻击。  
+_避免使用_: 域名白名单 (Domain Whitelist)、主机过滤 (Host Filter)
 
 **非 Root 生产容器 (Non-Root Production Container)**:
 基于 `python:3.11-slim` 底座与 `uv` 极速多阶段构建的生产安全容器镜像。剥离包编译器，镜像体积严格收敛于 150MB 以内；运行阶段强制下沉为专有非 root 账户 `appuser` (UID: 10001) 并禁用交互 Shell，符合企业最小权限与合规审计基线。  

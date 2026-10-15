@@ -32,10 +32,14 @@ services:
       # 是否开启分片集群模式 (若 URL 未显式声明 redis-cluster:// 协议头)
       - MCP_REDIS_CLUSTER=${MCP_REDIS_CLUSTER:-false}
 
-      # 双模传输网关协议与监听参数 (常驻 SSE 模式)
+      # 双模与全模传输网关协议与监听参数 (常驻 SSE 模式)
       - MCP_REDIS_TRANSPORT=sse
       - MCP_REDIS_SERVER_HOST=0.0.0.0
       - MCP_REDIS_SERVER_PORT=8000
+
+      # HTTP 访问鉴权令牌与域名白名单 (生产网络可选)
+      # - MCP_REDIS_AUTH_TOKEN=${MCP_REDIS_AUTH_TOKEN:-}
+      # - MCP_REDIS_ALLOWED_HOSTS=${MCP_REDIS_ALLOWED_HOSTS:-}
 
       # 跨服务身份标识与大模型指导指令 (可选)
       # - MCP_REDIS_SERVER_NAME=${MCP_REDIS_SERVER_NAME:-mcp-server-redis}

@@ -15,6 +15,7 @@ from mcp.types import CallToolResult, GetPromptResult, TextContent
 from mcp_server_redis.server import (
     SERVER_VERSION,
     build_argument_parser,
+    build_transport_security_settings,
     create_app,
     main,
     parse_cli_arguments,
@@ -82,10 +83,10 @@ async def test_create_app_mounts_resources_and_prompts() -> None:
 
 
 def test_create_app_sets_server_version() -> None:
-    """验证 create_app 正确配置服务协议版本号为 2.1.0。"""
+    """验证 create_app 正确配置服务协议版本号为 2.2.0。"""
     app = create_app(url="redis://localhost:6379/0")
     assert app.version == SERVER_VERSION
-    assert SERVER_VERSION == "2.1.0"
+    assert SERVER_VERSION == "2.2.0"
 
 
 @pytest.mark.asyncio
@@ -122,6 +123,8 @@ def test_build_argument_parser_defaults() -> None:
     assert args.audit_log is None
     assert args.server_name is None
     assert args.server_instructions is None
+    assert args.auth_token is None
+    assert args.allowed_hosts is None
     assert args.doctor is False
     assert args.json is False
 
@@ -148,6 +151,10 @@ def test_parse_cli_arguments_custom_values() -> None:
             "custom-redis-srv",
             "--server-instructions",
             "自定义业务系统提示",
+            "--auth-token",
+            "token_xyz_123",
+            "--allowed-hosts",
+            "mcp.corp.local,api.example.com",
             "--doctor",
             "--json",
         ]
@@ -164,6 +171,8 @@ def test_parse_cli_arguments_custom_values() -> None:
     assert config_dict["audit_log"] == "stderr"
     assert config_dict["server_name"] == "custom-redis-srv"
     assert config_dict["server_instructions"] == "自定义业务系统提示"
+    assert config_dict["auth_token"] == "token_xyz_123"
+    assert config_dict["allowed_hosts"] == "mcp.corp.local,api.example.com"
     assert config_dict["doctor"] is True
     assert config_dict["json"] is True
 
@@ -222,7 +231,7 @@ def test_parse_cli_arguments_log_level_choices() -> None:
 
 def test_parse_cli_arguments_transport_choices() -> None:
     """验证 --transport 支持大小写不敏感解析并限制合法选项。"""
-    for choice in ["stdio", "STDIO", "sse", "SSE"]:
+    for choice in ["stdio", "STDIO", "sse", "SSE", "streamable-http", "STREAMABLE-HTTP"]:
         res = parse_cli_arguments(["--transport", choice])
         assert res["transport"] == choice.lower()
 
@@ -284,6 +293,34 @@ def test_main_entrypoint_sse_mode(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
 
+def test_main_entrypoint_streamable_http_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 main() 入口在显式指定 --transport streamable-http 时启动流式 HTTP 传输网关。"""
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "mcp-server-redis",
+            "--transport",
+            "streamable-http",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9000",
+            "--auth-token",
+            "secret_token_abc",
+        ],
+    )
+    with patch("mcp_server_redis.server.create_app") as mock_create_app:
+        mock_app = MagicMock()
+        mock_create_app.return_value = mock_app
+        main()
+        mock_create_app.assert_called_once()
+        mock_app.run.assert_called_once_with(
+            transport="streamable-http",
+            host="0.0.0.0",
+            port=9000,
+        )
+
+
 @pytest.mark.asyncio
 async def test_create_app_cluster_flag_propagation() -> None:
     """验证 create_app 在显式指定 cluster=True 时正确将集群标记传递给 ConnectionRegistry。"""
@@ -324,12 +361,15 @@ async def test_health_and_healthz_routes() -> None:
         assert body["redis"] == "ok"
         assert body["version"] == SERVER_VERSION
 
-    # 2. 模拟 Redis PING 探活失败
+    # 2. 模拟 Redis PING 探活失败（模拟时间流逝超出 2 秒缓存窗口）
     mock_failing_client = AsyncMock()
     mock_failing_client.ping = AsyncMock(side_effect=OSError("Connection refused"))
-    with patch(
-        "mcp_server_redis.core.connection.ConnectionRegistry.get_client",
-        return_value=mock_failing_client,
+    with (
+        patch(
+            "mcp_server_redis.core.connection.ConnectionRegistry.get_client",
+            return_value=mock_failing_client,
+        ),
+        patch("mcp_server_redis.server.time.monotonic", return_value=9999999.0),
     ):
         res_fail = await endpoints["/healthz"](None)
         assert res_fail.status_code == 503
@@ -355,3 +395,103 @@ def test_create_app_server_identity_and_instructions() -> None:
     )
     assert app_custom.name == "order-center-redis"
     assert app_custom.instructions == "专门处理订单与库存业务"
+
+
+def test_build_transport_security_settings() -> None:
+    """验证 build_transport_security_settings 自动包含本地回环、通配端口及自定义域名。"""
+    settings = build_transport_security_settings(
+        host="192.168.1.50",
+        allowed_hosts=("api.example.com", "mcp.internal.net"),
+    )
+    assert settings.enable_dns_rebinding_protection is True
+    assert "127.0.0.1" in settings.allowed_hosts
+    assert "127.0.0.1:*" in settings.allowed_hosts
+    assert "localhost:*" in settings.allowed_hosts
+    assert "[::1]:*" in settings.allowed_hosts
+    assert "192.168.1.50" in settings.allowed_hosts
+    assert "192.168.1.50:*" in settings.allowed_hosts
+    assert "api.example.com" in settings.allowed_hosts
+    assert "api.example.com:*" in settings.allowed_hosts
+    assert "mcp.internal.net" in settings.allowed_hosts
+
+    # 验证 Origin 白名单同步生成
+    assert "http://127.0.0.1:*" in settings.allowed_origins
+    assert "https://api.example.com:*" in settings.allowed_origins
+
+
+def test_auth_token_middleware_protection() -> None:
+    """验证 AuthTokenMiddleware 对 MCP 通信端点的鉴权拦截，以及对探活端点的安全豁免。"""
+    from starlette.testclient import TestClient
+
+    app = create_app(
+        url="redis://localhost:6379/0",
+        auth_token="TEST_TOKEN_SECRET_123",
+        allowed_hosts=["testserver", "localhost"],
+    )
+    streamable_app = app.streamable_http_app()
+    with TestClient(streamable_app) as client:
+        mock_client = AsyncMock()
+        mock_client.ping = AsyncMock(return_value="PONG")
+        with patch(
+            "mcp_server_redis.core.connection.ConnectionRegistry.get_client",
+            return_value=mock_client,
+        ):
+            # 1. 探活端点 (/health, /healthz) 豁免鉴权，无 Token 正常访问返回 200
+            res_healthz = client.get("/healthz")
+            assert res_healthz.status_code == 200
+            assert res_healthz.json()["status"] == "healthy"
+
+            res_health = client.get("/health")
+            assert res_health.status_code == 200
+
+            # 验证 2 秒内存短缓存防击穿：短时间内再次调用 /healthz 不会再次下发底层 Redis PING
+            mock_client.ping.assert_awaited_once()
+            res_healthz_cached = client.get("/healthz")
+            assert res_healthz_cached.status_code == 200
+            mock_client.ping.assert_awaited_once()  # 仍为 1 次，未发生额外穿透
+
+        # 2. 浏览器 CORS 跨源预检请求 (OPTIONS) 豁免鉴权（无需 Token 直接放行）
+        res_options = client.options("/mcp")
+        assert res_options.status_code != 401
+
+        # 3. 受保护的 MCP 通信端点 (/mcp) 未提供 Token 拦截返回 401
+        res_unauth = client.post("/mcp", json={})
+        assert res_unauth.status_code == 401
+        assert res_unauth.json()["error"] == "Unauthorized"
+        assert "Missing or invalid authentication token" in res_unauth.json()["message"]
+
+        # 4. 携带错误 Token 拦截返回 401
+        res_wrong_token = client.post(
+            "/mcp",
+            json={},
+            headers={"Authorization": "Bearer WRONG_TOKEN"},
+        )
+        assert res_wrong_token.status_code == 401
+
+        # 5. 携带合法 Header Bearer Token 放行通过鉴权门禁（进入下游 MCP 协议处理层）
+        res_bearer = client.post(
+            "/mcp",
+            json={},
+            headers={"Authorization": "Bearer TEST_TOKEN_SECRET_123"},
+        )
+        assert res_bearer.status_code != 401
+
+        # 6. 携带合法 URL Query 参数 ?token=<token> 放行通过鉴权门禁
+        res_query = client.post(
+            "/mcp?token=TEST_TOKEN_SECRET_123",
+            json={},
+        )
+        assert res_query.status_code != 401
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_app_health_routes() -> None:
+    """验证 streamable_http_app 同样具备 /health 与 /healthz 云原生健康检查端点。"""
+    from starlette.routing import Route
+
+    app = create_app(url="redis://localhost:6379/0")
+    # 未开启鉴权时直接返回原始 Starlette 应用
+    streamable_app = app.streamable_http_app()
+    endpoints = {r.path: r.endpoint for r in streamable_app.routes if isinstance(r, Route)}
+    assert "/health" in endpoints
+    assert "/healthz" in endpoints

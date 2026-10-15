@@ -104,7 +104,7 @@ async def test_doctor_runner_single_connection_success() -> None:
     assert "Security" in cat_names
 
     # 验证只读模式被识别
-    sec_item = next(it for it in report.items if it.category == "Security")
+    sec_item = next(it for it in report.items if it.category == "Security" and "实例" in it.name)
     assert sec_item.status == "ok"
     assert "受保护的只读模式" in sec_item.message
 
@@ -144,7 +144,7 @@ async def test_doctor_runner_write_probe_success() -> None:
         report = await runner.run_diagnostics()
 
     assert report.is_healthy is True
-    sec_item = next(it for it in report.items if it.category == "Security")
+    sec_item = next(it for it in report.items if it.category == "Security" and "实例" in it.name)
     assert sec_item.status == "ok"
     assert "写权限校验通过" in sec_item.message
 
@@ -183,7 +183,7 @@ async def test_doctor_runner_write_probe_readonly_replica_failure() -> None:
         report = await runner.run_diagnostics()
 
     assert report.is_healthy is False
-    sec_item = next(it for it in report.items if it.category == "Security")
+    sec_item = next(it for it in report.items if it.category == "Security" and "实例" in it.name)
     assert sec_item.status == "fail"
     assert "只读从库" in sec_item.message
 
@@ -279,10 +279,89 @@ connections:
     assert any("local" in it.name for it in conn_items)
     assert any("remote-ro" in it.name for it in conn_items)
 
-    # 检查权限项：local 写探针通过，remote-ro 为只读
+    # 检查安全与权限项：传输安全 + local 写探针通过 + remote-ro 只读
     sec_items = [it for it in report.items if it.category == "Security"]
-    assert len(sec_items) == 2
+    assert len(sec_items) == 3
     local_sec = next(it for it in sec_items if "local" in it.name)
     assert "写权限校验通过" in local_sec.message
     remote_sec = next(it for it in sec_items if "remote-ro" in it.name)
     assert "受保护的只读模式" in remote_sec.message
+    trans_sec = next(it for it in sec_items if "传输协议" in it.name)
+    assert trans_sec.status == "ok"
+
+
+def test_doctor_transport_security_stdio() -> None:
+    """验证 Stdio 传输模式下的传输安全自检项判定为 OK。"""
+    config = ServerConfig(
+        url="redis://localhost:6379/0",
+        config=None,
+        allow_write=False,
+        log_level="INFO",
+        transport="stdio",
+    )
+    runner = DoctorRunner(server_config=config)
+    report = DoctorReport()
+    runner._check_transport_security(report)
+
+    sec_item = next(it for it in report.items if it.category == "Security")
+    assert sec_item.status == "ok"
+    assert "Stdio" in sec_item.message
+
+
+def test_doctor_transport_security_http_wildcard_no_auth() -> None:
+    """验证 HTTP 网关绑定 0.0.0.0 且未配置 auth-token 时输出警告。"""
+    config = ServerConfig(
+        url="redis://localhost:6379/0",
+        config=None,
+        allow_write=False,
+        log_level="INFO",
+        transport="sse",
+        host="0.0.0.0",
+        auth_token=None,
+    )
+    runner = DoctorRunner(server_config=config)
+    report = DoctorReport()
+    runner._check_transport_security(report)
+
+    sec_item = next(it for it in report.items if it.category == "Security")
+    assert sec_item.status == "warn"
+    assert "未配置 --auth-token" in sec_item.message
+
+
+def test_doctor_transport_security_http_token_strength() -> None:
+    """验证配置了短 Token 输出弱口令警告，满足 16 位安全基线输出 OK。"""
+    # 1. 弱 Token (8 位) -> warn
+    config_weak = ServerConfig(
+        url="redis://localhost:6379/0",
+        config=None,
+        allow_write=False,
+        log_level="INFO",
+        transport="streamable-http",
+        host="0.0.0.0",
+        auth_token="weak1234",
+    )
+    runner_weak = DoctorRunner(server_config=config_weak)
+    report_weak = DoctorReport()
+    runner_weak._check_transport_security(report_weak)
+
+    weak_item = next(it for it in report_weak.items if it.category == "Security")
+    assert weak_item.status == "warn"
+    assert "低于推荐的 16 字符安全基线" in weak_item.message
+
+    # 2. 强 Token (32 位) -> ok
+    config_strong = ServerConfig(
+        url="redis://localhost:6379/0",
+        config=None,
+        allow_write=False,
+        log_level="INFO",
+        transport="streamable-http",
+        host="0.0.0.0",
+        auth_token="secure_token_with_high_entropy_32",
+    )
+    runner_strong = DoctorRunner(server_config=config_strong)
+    report_strong = DoctorReport()
+    runner_strong._check_transport_security(report_strong)
+
+    strong_item = next(it for it in report_strong.items if it.category == "Security")
+    assert strong_item.status == "ok"
+    assert "满足复杂度基线" in strong_item.message

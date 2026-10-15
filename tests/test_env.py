@@ -14,7 +14,9 @@ from mcp_server_redis.core.env import (
     load_dotenv_if_exists,
     parse_bool_env,
     resolve_allow_write_from_env,
+    resolve_allowed_hosts_from_env,
     resolve_audit_log_from_env,
+    resolve_auth_token_from_env,
     resolve_cluster_flag_from_env,
     resolve_config_path_from_env,
     resolve_connect_timeout_from_env,
@@ -271,12 +273,14 @@ def test_resolve_server_configuration_log_level_priority() -> None:
 
 def test_resolve_server_configuration_transport_priority() -> None:
     """验证配置决议器对传输模式、主机与端口的优先级判定（CLI > 环境变量 > 默认保底）。"""
-    # 1. 默认缺省保底值
+    # 1. 默认缺省保底值（安全默认原则：监听 127.0.0.1）
     with patch.dict(os.environ, {}, clear=True):
         res = resolve_server_configuration()
         assert res.transport == "stdio"
-        assert res.host == "0.0.0.0"
+        assert res.host == "127.0.0.1"
         assert res.port == 8000
+        assert res.auth_token is None
+        assert res.allowed_hosts == ()
 
     # 2. 环境变量决议
     with patch.dict(
@@ -369,6 +373,9 @@ def test_resolve_transport_from_env() -> None:
         ("sse", "sse"),
         ("SSE", "sse"),
         ("  sse  ", "sse"),
+        ("streamable-http", "streamable-http"),
+        ("STREAMABLE-HTTP", "streamable-http"),
+        ("  streamable-http  ", "streamable-http"),
     ]
     for raw_val, expected in test_cases:
         with patch.dict(os.environ, {"MCP_REDIS_TRANSPORT": raw_val}, clear=True):
@@ -380,12 +387,12 @@ def test_resolve_transport_from_env() -> None:
 
 
 def test_resolve_server_host_from_env() -> None:
-    """验证从环境变量解析服务绑定主机，缺省保底 0.0.0.0。"""
+    """验证从环境变量解析服务绑定主机，缺省保底 127.0.0.1。"""
     with patch.dict(os.environ, {}, clear=True):
-        assert resolve_server_host_from_env() == "0.0.0.0"
-
-    with patch.dict(os.environ, {"MCP_REDIS_SERVER_HOST": "127.0.0.1"}, clear=True):
         assert resolve_server_host_from_env() == "127.0.0.1"
+
+    with patch.dict(os.environ, {"MCP_REDIS_SERVER_HOST": "0.0.0.0"}, clear=True):
+        assert resolve_server_host_from_env() == "0.0.0.0"
 
 
 def test_resolve_server_port_from_env() -> None:
@@ -558,3 +565,70 @@ def test_resolve_server_configuration_server_identity_priority() -> None:
         )
         assert cfg_cli.server_name == "cli-redis"
         assert cfg_cli.server_instructions == "cli instructions"
+
+
+def test_resolve_auth_token_from_env() -> None:
+    """验证从环境变量解析 HTTP 访问认证令牌，空值或缺失返回 None。"""
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_auth_token_from_env() is None
+
+    with patch.dict(os.environ, {"MCP_REDIS_AUTH_TOKEN": "  "}, clear=True):
+        assert resolve_auth_token_from_env() is None
+
+    with patch.dict(os.environ, {"MCP_REDIS_AUTH_TOKEN": "  secret_token_123  "}, clear=True):
+        assert resolve_auth_token_from_env() == "secret_token_123"
+
+
+def test_resolve_allowed_hosts_from_env() -> None:
+    """验证从环境变量解析允许主机白名单，支持逗号分隔、去重与空格剥离。"""
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_allowed_hosts_from_env() == ()
+
+    with patch.dict(os.environ, {"MCP_REDIS_ALLOWED_HOSTS": "  "}, clear=True):
+        assert resolve_allowed_hosts_from_env() == ()
+
+    with patch.dict(
+        os.environ,
+        {
+            "MCP_REDIS_ALLOWED_HOSTS": "api.example.com, *.internal.net, api.example.com, , mcp.corp.local"
+        },
+        clear=True,
+    ):
+        hosts = resolve_allowed_hosts_from_env()
+        assert hosts == ("api.example.com", "*.internal.net", "mcp.corp.local")
+
+
+def test_resolve_server_configuration_auth_token_and_allowed_hosts() -> None:
+    """验证 resolve_server_configuration 中 auth_token 与 allowed_hosts 决议优先级（CLI > 环境变量 > 默认保底）。"""
+    # 1. 默认缺省保底值
+    with patch.dict(os.environ, {}, clear=True):
+        cfg = resolve_server_configuration()
+        assert cfg.auth_token is None
+        assert cfg.allowed_hosts == ()
+
+    # 2. 环境变量生效
+    with patch.dict(
+        os.environ,
+        {
+            "MCP_REDIS_AUTH_TOKEN": "env_token_abc",
+            "MCP_REDIS_ALLOWED_HOSTS": "h1.com, h2.com",
+        },
+        clear=True,
+    ):
+        cfg_env = resolve_server_configuration()
+        assert cfg_env.auth_token == "env_token_abc"
+        assert cfg_env.allowed_hosts == ("h1.com", "h2.com")
+
+        # 3. CLI 显式覆盖环境变量（支持字符串逗号切分与列表传入）
+        cfg_cli_str = resolve_server_configuration(
+            cli_auth_token="cli_token_override",
+            cli_allowed_hosts="override1.com, override2.com, override1.com",
+        )
+        assert cfg_cli_str.auth_token == "cli_token_override"
+        assert cfg_cli_str.allowed_hosts == ("override1.com", "override2.com")
+
+        cfg_cli_list = resolve_server_configuration(
+            cli_auth_token="cli_token_override",
+            cli_allowed_hosts=["list1.com", "list2.com", "list1.com"],
+        )
+        assert cfg_cli_list.allowed_hosts == ("list1.com", "list2.com")

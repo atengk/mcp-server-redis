@@ -10,20 +10,25 @@ FastMCP 服务主装配与 CLI 命令行协议入口。
 import argparse
 import asyncio
 import logging
+import secrets
 import sys
+import time
+import urllib.parse
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Final
 
 import redis.exceptions
 from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 # 兼容 FastMCP 历史类型名称
 FastMCP = MCPServer
 
 # 服务端版本号常量
-SERVER_VERSION: Final[str] = "2.1.0"
+SERVER_VERSION: Final[str] = "2.2.0"
 
 from mcp_server_redis.core.audit import AuditLogger
 from mcp_server_redis.core.connection import ConnectionRegistry
@@ -44,21 +49,154 @@ from mcp_server_redis.tools.keys import register_key_tools
 logger = logging.getLogger("mcp_server_redis")
 
 
-def setup_healthz_routes(server: FastMCP, registry: ConnectionRegistry) -> None:
-    """为 FastMCP 挂载 /health 与 /healthz 云原生健康检查 HTTP 端点。
+def build_transport_security_settings(
+    host: str,
+    allowed_hosts: tuple[str, ...],
+) -> TransportSecuritySettings:
+    """构建 HTTP 传输安全设置，防御 DNS 重绑定与未授权跨源调用。
 
-    结合底层 Redis PING 探活，正常返回 200，异常返回 503。
+    基础白名单默认收敛允许 127.0.0.1:*、localhost:*、[::1]:* 以及当前绑定的 host。
+    同时与用户显式指定的 allowed_hosts 合并去重。
 
-    Args:
-        server: FastMCP 服务端实例
-        registry: 连接注册中心单例
+    @param host 服务端绑定的主机监听地址
+    @param allowed_hosts 用户显式声明的允许主机标头白名单
+    @return 配置完成的 TransportSecuritySettings 实例
+    """
+    hosts_set: set[str] = {
+        "127.0.0.1",
+        "127.0.0.1:*",
+        "localhost",
+        "localhost:*",
+        "[::1]",
+        "[::1]:*",
+    }
+    if host and host not in ("0.0.0.0", "::"):
+        hosts_set.add(host)
+        if ":*" not in host:
+            hosts_set.add(f"{host}:*")
+
+    for h in allowed_hosts:
+        cleaned = h.strip()
+        if cleaned:
+            hosts_set.add(cleaned)
+            if ":*" not in cleaned and not cleaned.endswith(":"):
+                hosts_set.add(f"{cleaned}:*")
+
+    origins: list[str] = []
+    for h in sorted(hosts_set):
+        clean_h = h.rstrip(":*")
+        origins.append(f"http://{clean_h}:*")
+        origins.append(f"http://{clean_h}")
+        origins.append(f"https://{clean_h}:*")
+        origins.append(f"https://{clean_h}")
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=sorted(hosts_set),
+        allowed_origins=sorted(set(origins)),
+    )
+
+
+class AuthTokenMiddleware:
+    """轻量 HTTP 访问令牌鉴权 ASGI 中间件。
+
+    拦截 SSE 与 Streamable-HTTP 通信端点，同时对探活端点 (/health, /healthz) 豁免鉴权。
+    支持 Authorization: Bearer <token> 标头与 ?token=<token> 查询参数。
+    采用时序常数级比对防御侧信道攻击。
+
+    @author Ateng
+    @since 2026-10-15
+    """
+
+    def __init__(self, app: ASGIApp, auth_token: str | None = None) -> None:
+        self.app = app
+        self.auth_token = auth_token
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not self.auth_token:
+            await self.app(scope, receive, send)
+            return
+
+        # 豁免跨源预检请求 (CORS Preflight)
+        if scope.get("method") == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+
+        path: str = scope.get("path", "")
+        # 豁免探活端点
+        if path in ("/health", "/healthz") or path.startswith(("/health/", "/healthz/")):
+            await self.app(scope, receive, send)
+            return
+
+        # 1. 提取 Authorization: Bearer <token> 标头
+        token: str | None = None
+        headers = dict(scope.get("headers", []))
+        auth_header = headers.get(b"authorization", b"").decode("latin1").strip()
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+
+        # 2. 备选提取 URL 查询参数 ?token=<token>
+        if not token:
+            query_string = scope.get("query_string", b"").decode("latin1")
+            for part in query_string.split("&"):
+                if part.startswith("token="):
+                    token = urllib.parse.unquote(part.split("=", 1)[1])
+                    break
+
+        # 3. 常数时间验证防时序攻击
+        if token and secrets.compare_digest(token, self.auth_token):
+            await self.app(scope, receive, send)
+            return
+
+        # 4. 未授权拦截响应
+        response = JSONResponse(
+            {
+                "error": "Unauthorized",
+                "message": "Missing or invalid authentication token",
+            },
+            status_code=401,
+        )
+        await response(scope, receive, send)
+
+
+def setup_healthz_routes(
+    server: FastMCP,
+    registry: ConnectionRegistry,
+    server_config: ServerConfig | None = None,
+) -> None:
+    """为 FastMCP 挂载 /health 与 /healthz 云原生健康检查 HTTP 端点，并装配 HTTP 传输安全网关。
+
+    同时拦截包装 sse_app 与 streamable_http_app：
+    1. 注入 DNS 重绑定防护 TransportSecuritySettings；
+    2. 注册 /health 与 /healthz Redis PING 探活端点（内建 2.0s 内存短缓存防高频击穿）；
+    3. 若配置了 auth_token，通过 AuthTokenMiddleware 实施访问令牌鉴权门禁。
+
+    @param server FastMCP 服务端实例
+    @param registry 连接注册中心单例
+    @param server_config 服务端运行时生效配置（可选）
     """
     original_sse_app = server.sse_app
+    original_streamable_http_app = server.streamable_http_app
 
-    def wrapped_sse_app(*args: Any, **kwargs: Any) -> Any:
-        starlette_app = original_sse_app(*args, **kwargs)
+    # 探活短时内存状态缓存状态量 (TTL 2.0s)
+    last_probe_time: float = 0.0
+    cached_status_code: int = 200
+    cached_content: dict[str, Any] = {}
+    cache_lock = asyncio.Lock()
 
-        async def _health_endpoint(request: Any) -> Any:
+    async def _health_endpoint(request: Any) -> Any:
+        nonlocal last_probe_time, cached_status_code, cached_content
+        now = time.monotonic()
+        # 1. 快速无锁检查（2 秒内直接复用缓存，杜绝外部刷探活导致 Redis 连接池耗尽）
+        if now - last_probe_time < 2.0 and cached_content:
+            return JSONResponse(cached_content, status_code=cached_status_code)
+
+        async with cache_lock:
+            # 2. 双重检查锁 (DCL)
+            now = time.monotonic()
+            if now - last_probe_time < 2.0 and cached_content:
+                return JSONResponse(cached_content, status_code=cached_status_code)
+
             status_code = 200
             redis_status = "ok"
             error_message = None
@@ -77,13 +215,43 @@ def setup_healthz_routes(server: FastMCP, registry: ConnectionRegistry) -> None:
             }
             if error_message:
                 content["error"] = error_message
+
+            last_probe_time = now
+            cached_status_code = status_code
+            cached_content = content
             return JSONResponse(content, status_code=status_code)
 
+    def _apply_http_security(starlette_app: Any) -> Any:
         starlette_app.add_route("/health", _health_endpoint, methods=["GET"])
         starlette_app.add_route("/healthz", _health_endpoint, methods=["GET"])
+        if server_config and server_config.auth_token:
+            return AuthTokenMiddleware(starlette_app, auth_token=server_config.auth_token)
         return starlette_app
 
+    def wrapped_sse_app(*args: Any, **kwargs: Any) -> Any:
+        if server_config and (
+            "transport_security" not in kwargs or kwargs["transport_security"] is None
+        ):
+            kwargs["transport_security"] = build_transport_security_settings(
+                host=server_config.host,
+                allowed_hosts=server_config.allowed_hosts,
+            )
+        starlette_app = original_sse_app(*args, **kwargs)
+        return _apply_http_security(starlette_app)
+
+    def wrapped_streamable_http_app(*args: Any, **kwargs: Any) -> Any:
+        if server_config and (
+            "transport_security" not in kwargs or kwargs["transport_security"] is None
+        ):
+            kwargs["transport_security"] = build_transport_security_settings(
+                host=server_config.host,
+                allowed_hosts=server_config.allowed_hosts,
+            )
+        starlette_app = original_streamable_http_app(*args, **kwargs)
+        return _apply_http_security(starlette_app)
+
     server.sse_app = wrapped_sse_app  # type: ignore[method-assign]
+    server.streamable_http_app = wrapped_streamable_http_app  # type: ignore[method-assign]
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -101,16 +269,19 @@ def build_argument_parser() -> argparse.ArgumentParser:
   # 2. 显式开启数据写权限并持久化结构化审计日志:
   atengk-mcp-server-redis --url "redis://:pwd@remote.host:6379/0" --allow-write --audit-log /var/log/redis_audit.jsonl
 
-  # 3. 加载多环境连接配置文件并以 HTTP SSE 网关模式启动:
-  atengk-mcp-server-redis --config ./connections.yaml --transport sse --host 0.0.0.0 --port 8000
+  # 3. 加载多环境连接配置文件并以 HTTP SSE 网关模式启动 (带访问令牌鉴权):
+  atengk-mcp-server-redis --config ./connections.yaml --transport sse --host 127.0.0.1 --port 8000 --auth-token "YOUR_SECRET_TOKEN"
 
-  # 4. 执行生产环境连通性、配置与权限四维健康自检探针:
+  # 4. 以 Streamable-HTTP 模式启动并配置反向代理域名白名单:
+  atengk-mcp-server-redis --url "redis://localhost:6379/0" --transport streamable-http --host 0.0.0.0 --port 8000 --allowed-hosts "mcp.example.com" --auth-token "YOUR_SECRET_TOKEN"
+
+  # 5. 执行生产环境连通性、配置与权限四维健康自检探针:
   atengk-mcp-server-redis --url "redis://localhost:6379/0" --doctor
 
-  # 5. 导出 CI/CD 机器可读的结构化 JSON 诊断报告:
+  # 6. 导出 CI/CD 机器可读的结构化 JSON 诊断报告:
   atengk-mcp-server-redis --config ./connections.yaml --doctor --json
 
-  # 6. 查看服务版本与底层运行时环境指纹:
+  # 7. 查看服务版本与底层运行时环境指纹:
   atengk-mcp-server-redis --version
 """
     parser = argparse.ArgumentParser(
@@ -155,27 +326,39 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=None,
         help="命令审计日志输出目标（'stderr', 'stdout' 或文件路径；默认读取 MCP_REDIS_AUDIT_LOG 环境变量）",
     )
+    sec_group.add_argument(
+        "--auth-token",
+        type=str,
+        default=None,
+        help="HTTP 传输层鉴权访问凭据（支持 Bearer Token 与 URL 查询参数；默认读取 MCP_REDIS_AUTH_TOKEN 环境变量）",
+    )
 
     # 3. 服务与网络传输
     trans_group = parser.add_argument_group("服务与网络传输 (Transport & Server)")
     trans_group.add_argument(
         "--transport",
         type=str.lower,
-        choices=["stdio", "sse"],
+        choices=["stdio", "sse", "streamable-http"],
         default=None,
-        help="传输协议模式（stdio 或 sse，默认读取 MCP_REDIS_TRANSPORT 环境变量或默认 stdio）",
+        help="传输协议模式（stdio、sse 或 streamable-http，默认读取 MCP_REDIS_TRANSPORT 环境变量或默认 stdio）",
     )
     trans_group.add_argument(
         "--host",
         type=str,
         default=None,
-        help="SSE 模式服务监听主机（默认读取 MCP_REDIS_SERVER_HOST 环境变量或默认 0.0.0.0）",
+        help="HTTP 模式服务监听主机（默认读取 MCP_REDIS_SERVER_HOST 环境变量或默认 127.0.0.1）",
     )
     trans_group.add_argument(
         "--port",
         type=int,
         default=None,
-        help="SSE 模式服务监听端口（默认读取 MCP_REDIS_SERVER_PORT 环境变量或默认 8000）",
+        help="HTTP 模式服务监听端口（默认读取 MCP_REDIS_SERVER_PORT 环境变量或默认 8000）",
+    )
+    trans_group.add_argument(
+        "--allowed-hosts",
+        type=str,
+        default=None,
+        help="HTTP 传输层允许的主机标头白名单（逗号分隔多主机规则，防御 DNS 重绑定；默认读取 MCP_REDIS_ALLOWED_HOSTS 环境变量）",
     )
     trans_group.add_argument(
         "--log-level",
@@ -242,6 +425,8 @@ def parse_cli_arguments(args: list[str] | None = None) -> dict[str, Any]:
         "audit_log": parsed.audit_log,
         "server_name": parsed.server_name,
         "server_instructions": parsed.server_instructions,
+        "auth_token": parsed.auth_token,
+        "allowed_hosts": parsed.allowed_hosts,
         "doctor": parsed.doctor,
         "json": parsed.json,
     }
@@ -256,6 +441,8 @@ def create_app(
     audit_log: str | None = None,
     server_name: str | None = None,
     server_instructions: str | None = None,
+    auth_token: str | None = None,
+    allowed_hosts: str | tuple[str, ...] | list[str] | None = None,
     server_config: ServerConfig | None = None,
 ) -> FastMCP:
     """工厂函数：根据配置初始化连接注册中心、安全守卫并装配核心 4 个 MCP 工具。
@@ -270,6 +457,8 @@ def create_app(
     @param audit_log 命令审计日志输出目标（可选）
     @param server_name MCP 服务实例名称标识（可选）
     @param server_instructions 向大模型注入的全局系统级指导指令（可选）
+    @param auth_token HTTP 传输层访问鉴权凭据（可选）
+    @param allowed_hosts HTTP 传输层允许的主机标头白名单（可选）
     @param server_config 预决议完成的服务端配置对象（可选，若提供则优先采用，避免二次决议）
     @return 已经完成全部工具装配与生命周期绑定的 FastMCP 实例
     """
@@ -283,6 +472,8 @@ def create_app(
         cli_audit_log=audit_log,
         cli_server_name=server_name,
         cli_server_instructions=server_instructions,
+        cli_auth_token=auth_token,
+        cli_allowed_hosts=allowed_hosts,
     )
 
     # 1. 初始化连接注册中心 (ConnectionRegistry)
@@ -337,8 +528,8 @@ def create_app(
     register_resources(app, registry)
     register_prompts(app)
 
-    # 6. 装配挂载云原生 HTTP 探活端点 (/health 与 /healthz)
-    setup_healthz_routes(app, registry)
+    # 6. 装配挂载云原生 HTTP 探活端点与安全网关 (/health 与 /healthz)
+    setup_healthz_routes(app, registry, server_config=effective_config)
 
     return app
 
@@ -358,6 +549,8 @@ def main() -> None:
         cli_audit_log=config_dict["audit_log"],
         cli_server_name=config_dict.get("server_name"),
         cli_server_instructions=config_dict.get("server_instructions"),
+        cli_auth_token=config_dict.get("auth_token"),
+        cli_allowed_hosts=config_dict.get("allowed_hosts"),
     )
 
     # 若指定了 --doctor 标志，运行生产环境健康自检探针并按检测结果退出
@@ -383,8 +576,15 @@ def main() -> None:
 
     app = create_app(server_config=server_config)
 
-    # 根据传输协议启动对应网关（双模传输网关）
-    if server_config.transport == "sse":
+    # 根据传输协议启动对应网关（全模传输网关）
+    if server_config.transport == "streamable-http":
+        logger.info(
+            "mcp-server-redis 正在以 Streamable-HTTP 传输网关模式启动于 http://%s:%d/mcp ...",
+            server_config.host,
+            server_config.port,
+        )
+        app.run(transport="streamable-http", host=server_config.host, port=server_config.port)
+    elif server_config.transport == "sse":
         logger.info(
             "mcp-server-redis 正在以 SSE 传输网关模式启动于 http://%s:%d/sse ...",
             server_config.host,
