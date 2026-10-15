@@ -56,8 +56,8 @@
   - `redis_inspect_key`：单键多维诊断（类型、TTL/PTTL、内存占用字节及底层编码格式）；
   - 所有工具统一支持 `connection`（连接别名）与 `db`（0~15 逻辑库编号）参数，物理禁止在连接池上执行全局有状态 `SELECT` 指令。
 - 🌐 **全 MCP 协议矩阵支持 (Tools + Resources + Prompts)**：
-  - 挂载 `redis://{connection}/info` 与 `redis://{connection}/slowlog` 只读系统快照；
-  - 提供 `redis_diagnose_memory` 与 `redis_analyze_slowlog` 标准排障 SOP 提示词模板。
+  - 挂载 `redis://{connection}/info`、`redis://{connection}/slowlog` 与客户端脱敏快照 `redis://{connection}/clients` 只读系统资源；
+  - 提供 `redis_diagnose_memory`、`redis_analyze_slowlog` 与 `redis_troubleshoot_bigkeys` 标准排障 SOP 提示词模板。
 
 ---
 
@@ -121,12 +121,13 @@ redis_execute_command(command="DEL cache:item1 cache:item2")
 返回待确认结构体（**此时未执行物理删除**）：
 ```json
 {
-  "status": "confirmation_required",
   "command": "DEL cache:item1 cache:item2",
+  "status": "confirmation_required",
+  "result": null,
+  "data_type": "confirmation_required",
   "keys": ["cache:item1", "cache:item2"],
   "target_count": 2,
   "message": "该高危删除操作涉及 2 个键: ['cache:item1', 'cache:item2']。为防止非预期数据丢失，请在仔细核对后显式传入 confirm=True 确认执行。",
-  "data_type": "confirmation_required",
   "is_truncated": false,
   "total_count": 2
 }
@@ -239,6 +240,7 @@ redis_list_connections()
       "db": 0,
       "readonly": false,
       "description": "本地开发实例",
+      "key_patterns": ["*"],
       "is_default": true
     },
     {
@@ -247,6 +249,7 @@ redis_list_connections()
       "db": 0,
       "readonly": true,
       "description": "生产只读从库",
+      "key_patterns": ["order:*", "user:*"],
       "is_default": false
     }
   ]
@@ -579,7 +582,7 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
-容器启动后，MCP 服务端将在宿主机 `http://localhost:8000/sse` 持续监听。各大支持远程 SSE 协议的 MCP 客户端（如 Cherry Studio、远程 Web AI 网关等）只需直接填写该 URL 即可挂载。
+容器启动后，MCP 服务端将在宿主机 `http://localhost:8000/sse` 持续监听。各大支持远程 SSE 协议的 MCP 客户端（如 Cherry Studio、远程 Web AI 网关等）只需直接填写该 URL 即可挂载。同时可直接通过 `http://localhost:8000/healthz` 进行容器或云原生网关连通性探活。
 
 ---
 
@@ -640,11 +643,19 @@ uvx atengk-mcp-server-redis --url "redis://10.0.0.1:6379" --cluster --allow-writ
    - 默认模式，日志严格绑定至 `sys.stderr`，绝不污染 stdout 协议流，100% 严格向后兼容所有现有客户端配置；
 2. **HTTP Server-Sent Events (SSE) 服务端模式**：
    - 通过 `--transport sse`（或 `MCP_REDIS_TRANSPORT=sse`）激活；
-   - 支持 `--host`（默认 `0.0.0.0`）与 `--port`（默认 `8000`）自定义监听绑定。
+   - 支持 `--host`（默认 `0.0.0.0`）与 `--port`（默认 `8000`）自定义监听绑定；
+3. **云原生健康探活路由 (`/health` 与 `/healthz`)**：
+   - 在 SSE 模式下，服务端自动挂载 `/health` 与 `/healthz` HTTP GET 探活端点；
+   - 结合底层 Redis `PING` 探活与 1.0 秒保底超时，精准适配 Kubernetes Liveness / Readiness 探针及负载均衡健康切流：
+     - **健康正常 (HTTP 200)**：`{"status": "healthy", "version": "2.1.0", "redis": "ok"}`
+     - **连接异常 (HTTP 503)**：`{"status": "unhealthy", "version": "2.1.0", "redis": "error", "error": "..."}`
 
 ```bash
 # 启动 HTTP SSE 网关监听于 0.0.0.0:8000
 uvx atengk-mcp-server-redis --transport sse --host 0.0.0.0 --port 8000
+
+# 验证云原生探活健康检查
+curl -i http://localhost:8000/healthz
 ```
 
 ---
@@ -716,7 +727,7 @@ uvx atengk-mcp-server-redis --transport sse --host 0.0.0.0 --port 8000
 | `MCP_REDIS_ALLOW_WRITE` | `false` | 正向显式授权写权限。值为 `true`、`1`、`yes`、`on` 时开启写操作 |
 | `MCP_REDIS_READ_ONLY` | `true` | 反向只读控制。显式设为 `false`、`0`、`no`、`off` 时解除只读并开启写权限 |
 | `MCP_REDIS_LOG_LEVEL` | `INFO` | 运行时日志输出级别。支持 `DEBUG`、`INFO`、`WARNING`、`ERROR`（日志严格绑定至 stderr） |
-| `MCP_REDIS_CONNECT_TIMEOUT` | `5.0` | Socket 连接超时保底时间（秒），防止节点宕机网络挂死 |
+| `MCP_REDIS_CONNECT_TIMEOUT` | `5.0` | Socket 连接超时保底时间（秒），防止节点宕机网络挂死，亦支持别名 `MCP_REDIS_SOCKET_CONNECT_TIMEOUT` |
 | `MCP_REDIS_SOCKET_TIMEOUT` | `10.0` | Socket 指令执行超时保底时间（秒），亦支持别名 `MCP_REDIS_TIMEOUT` |
 | `MCP_REDIS_MAX_CONNECTIONS` | `50` | 单个连接池最大并发连接数上限，防止异常网络重试打满 Redis 连接 |
 | `MCP_REDIS_AUDIT_LOG` | - | 结构化命令审计日志输出目标（'stderr'、'stdout' 或文件路径，stdio 传输模式下自动重定向至 stderr 杜绝协议污染） |
@@ -836,6 +847,8 @@ uvx atengk-mcp-server-redis --config ./connections.yaml --allow-write
 | **`confirmation_required`**<br>`status: confirmation_required` | 调用 `DEL` 或 `UNLINK` 命令时未显式传入 `confirm=True`。 | 属于正常安全二次确认拦截。大模型/调用方需在核对 `keys` 列表后，再次调用 `redis_execute_command(..., confirm=True)`。 |
 | **`DestructiveCommandError`**<br>`物理切断破坏性高危指令...` | 尝试执行破坏性删库或阻塞指令（`FLUSHALL`、`FLUSHDB`、`KEYS *`、`SHUTDOWN`、`CONFIG` 等）。 | 底层永久物理拦截，无法通过任何参数绕过。请改用键前缀安全扫描 `redis_scan_keys` 或单键操作。 |
 | **`CrossSlotError`**<br>`Redis Cluster 跨槽执行拦截...` | 在分片集群中执行跨越不同哈希槽的多键命令（如 `MGET {user1}:a {user2}:b`）。 | 遵循语义化引导，将多键指令拆分为针对单一键或相同哈希标签（`{hash_tag}`）的多次独立单键命令。 |
+| **`BigKeyReadBlockedError`**<br>`安全拦截：目标 ... 超过了单次全量读取安全防爆阈值...` | 发起无界全量读取指令（`HGETALL`、全量 `SMEMBERS`、`LRANGE 0 -1`、`ZRANGE 0 -1` 等），目标集合元素数量超出防爆上限（默认 2000 项）。 | 改用渐进式分页切片指令，如 `HSCAN <key> 0 COUNT 100`、`SSCAN`、`ZSCAN` 或有界切片 `LRANGE <key> 0 99`；亦可通过环境变量 `MCP_REDIS_MAX_UNBOUNDED_READ_ITEMS` 调高安全防爆阈值。 |
+| **`ConnectionNotFoundError`**<br>`指定的连接别名 '...' 不存在...` | 工具调用时传入了未在配置文件或命令行中声明的目标连接别名（`connection` 参数）。 | 服务端自动返回包含全部可用连接清单与业务描述的自愈引导信封，请根据信封提示选用正确的连接别名重新调用，或缺省使用默认连接。 |
 | **`ConnectionError`**<br>`Error connecting to host...` | Redis 端口未开放、网络不可达、防火墙拦截或连接超时。 | 使用 `Test-NetConnection` 或 `nc -zv` 验证网络链路，检查密码是否包含特殊字符（推荐使用离散环境变量配置）。 |
 
 ---

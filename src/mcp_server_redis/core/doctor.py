@@ -29,7 +29,7 @@ from mcp_server_redis.core.env import ServerConfig
 logger = logging.getLogger(__name__)
 
 # 服务端版本号常量
-SERVER_VERSION: Final[str] = "2.0.0"
+SERVER_VERSION: Final[str] = "2.1.0"
 
 DoctorCheckStatus = Literal["ok", "warn", "fail"]
 
