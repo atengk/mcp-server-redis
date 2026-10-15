@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: 检出源码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装 uv
         uses: astral-sh/setup-uv@v5
@@ -67,7 +67,7 @@ jobs:
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
     steps:
       - name: 检出源码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -123,7 +123,7 @@ jobs:
           cat checksums.txt
 
       - name: 归档不可变制品附件
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-dist
           path: dist/*
@@ -141,12 +141,12 @@ jobs:
       contents: write
     steps:
       - name: 检出源码 (全量历史供日志生成)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: 下载构建制品
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-dist
           path: dist
@@ -162,7 +162,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 创建 GitHub Release 并挂载发布内容
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.build-artifacts.outputs.tag_name }}
           name: ${{ needs.build-artifacts.outputs.tag_name }}
@@ -184,7 +184,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: 下载构建制品
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-dist
           path: dist
@@ -215,13 +215,13 @@ jobs:
       packages: write
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 设置 QEMU 模拟器（多架构支持）
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: 设置 Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: 登录 GitHub Container Registry
         uses: docker/login-action@v3

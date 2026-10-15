@@ -144,6 +144,10 @@ updates:
       include: "scope"
     labels:
       - "dependencies"
+    ignore:
+      # 生产环境容器底座固定于成熟稳定的 Python 3.11，忽略 >= 3.13 预览与非适配版本
+      - dependency-name: "python"
+        versions: [">= 3.13"]
     groups:
       docker-images:
         patterns:
